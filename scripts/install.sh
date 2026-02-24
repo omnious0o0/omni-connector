@@ -40,20 +40,48 @@ require_command node
 
 repo="${OMNI_CONNECTOR_REPO:-omnious0o0/omni-connector}"
 ref="${OMNI_CONNECTOR_REF:-main}"
-install_target="${OMNI_CONNECTOR_INSTALL_TARGET:-git+https://github.com/${repo}.git#${ref}}"
-repo_clone_url="${OMNI_CONNECTOR_REPO_URL:-https://github.com/${repo}.git}"
+archive_url="${OMNI_CONNECTOR_ARCHIVE_URL:-https://codeload.github.com/${repo}/tar.gz/${ref}}"
+install_target="${OMNI_CONNECTOR_INSTALL_TARGET:-}"
+
+download_file() {
+  local source_url="$1"
+  local destination_path="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$source_url" -o "$destination_path"
+    return
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$destination_path" "$source_url"
+    return
+  fi
+
+  printf "%bError:%b curl or wget is required to download installer assets.\n" "${bold}" "${reset}" >&2
+  exit 1
+}
 
 if [[ "${OMNI_CONNECTOR_INSTALLER_DRY_RUN:-0}" == "1" ]]; then
   print_step "Dry run enabled"
-  printf "Would run: npm install -g %s\n" "${install_target}"
+  if [[ -n "${install_target}" ]]; then
+    printf "Would run: npm install -g %s\n" "${install_target}"
+  else
+    printf "Would download source archive: %s\n" "${archive_url}"
+    printf "Would run: npm --prefix <source> install --include=dev --no-audit --no-fund\n"
+    printf "Would run: npm --prefix <source> run build\n"
+    printf "Would run: npm install -g --ignore-scripts <source>\n"
+  fi
   printf "Would run: omni-connector --init-only\n"
   exit 0
 fi
 
-print_step "Installing omni-connector globally from ${install_target}"
-if ! npm install -g "${install_target}"; then
-  print_step "Direct install failed, building from source fallback"
-  require_command git
+if [[ -n "${install_target}" ]]; then
+  print_step "Installing omni-connector globally from ${install_target}"
+  npm install -g "${install_target}"
+else
+  print_step "Installing omni-connector from source archive"
+
+  require_command tar
 
   tmp_dir="$(mktemp -d)"
   cleanup_tmp() {
@@ -61,15 +89,27 @@ if ! npm install -g "${install_target}"; then
   }
   trap cleanup_tmp EXIT
 
-  git clone --depth 1 --branch "${ref}" "${repo_clone_url}" "${tmp_dir}" >/dev/null 2>&1
-  npm --prefix "${tmp_dir}" install --include=dev --no-audit --no-fund
-  npm --prefix "${tmp_dir}" run build
-  npm install -g --ignore-scripts "${tmp_dir}"
+  archive_path="${tmp_dir}/omni-connector.tar.gz"
+  download_file "${archive_url}" "${archive_path}"
+  tar -xzf "${archive_path}" -C "${tmp_dir}"
+
+  source_dir="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [[ -z "${source_dir}" ]]; then
+    printf "%bError:%b Unable to unpack source archive from %s\n" "${bold}" "${reset}" "${archive_url}" >&2
+    exit 1
+  fi
+
+  npm --prefix "${source_dir}" install --include=dev --no-audit --no-fund
+  npm --prefix "${source_dir}" run build
+
+  package_archive_name="$(npm --prefix "${source_dir}" pack --silent --pack-destination "${tmp_dir}")"
+  package_archive_path="${tmp_dir}/${package_archive_name}"
+  npm install -g --ignore-scripts "${package_archive_path}"
 fi
 
 global_prefix="$(npm prefix -g)"
 global_bin="${global_prefix}/bin"
-if ! command -v omni-connector >/dev/null 2>&1 && [[ -x "${global_bin}/omni-connector" ]]; then
+if [[ -x "${global_bin}/omni-connector" ]]; then
   export PATH="${global_bin}:${PATH}"
 fi
 

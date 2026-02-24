@@ -10,8 +10,6 @@ Use the global installer one-liner:
 curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh | bash
 ```
 
-The installer prints a bold ASCII logo, installs `omni-connector` globally, and initializes runtime files.
-
 Then start it with:
 
 ```bash
