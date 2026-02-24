@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export GIT_TERMINAL_PROMPT=0
+export GCM_INTERACTIVE=never
+export GH_PROMPT_DISABLED=1
+export GIT_ASKPASS="${GIT_ASKPASS:-/bin/false}"
+
 bold="\033[1m"
 dim="\033[2m"
 reset="\033[0m"
@@ -35,7 +40,8 @@ require_command node
 
 repo="${OMNI_CONNECTOR_REPO:-omnious0o0/omni-connector}"
 ref="${OMNI_CONNECTOR_REF:-main}"
-install_target="${OMNI_CONNECTOR_INSTALL_TARGET:-github:${repo}#${ref}}"
+install_target="${OMNI_CONNECTOR_INSTALL_TARGET:-git+https://github.com/${repo}.git#${ref}}"
+repo_clone_url="${OMNI_CONNECTOR_REPO_URL:-https://github.com/${repo}.git}"
 
 if [[ "${OMNI_CONNECTOR_INSTALLER_DRY_RUN:-0}" == "1" ]]; then
   print_step "Dry run enabled"
@@ -45,7 +51,21 @@ if [[ "${OMNI_CONNECTOR_INSTALLER_DRY_RUN:-0}" == "1" ]]; then
 fi
 
 print_step "Installing omni-connector globally from ${install_target}"
-npm install -g "${install_target}"
+if ! npm install -g "${install_target}"; then
+  print_step "Direct install failed, building from source fallback"
+  require_command git
+
+  tmp_dir="$(mktemp -d)"
+  cleanup_tmp() {
+    rm -rf "${tmp_dir}"
+  }
+  trap cleanup_tmp EXIT
+
+  git clone --depth 1 --branch "${ref}" "${repo_clone_url}" "${tmp_dir}" >/dev/null 2>&1
+  npm --prefix "${tmp_dir}" install --include=dev --no-audit --no-fund
+  npm --prefix "${tmp_dir}" run build
+  npm install -g --ignore-scripts "${tmp_dir}"
+fi
 
 global_prefix="$(npm prefix -g)"
 global_bin="${global_prefix}/bin"
