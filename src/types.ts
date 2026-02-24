@@ -1,0 +1,133 @@
+export type ProviderId = "codex";
+export type QuotaWindowMode = "units" | "percent";
+
+export interface QuotaWindowState {
+  limit: number;
+  used: number;
+  mode?: QuotaWindowMode;
+  windowStartedAt: string;
+  resetsAt?: string | null;
+}
+
+export interface AccountQuotaState {
+  fiveHour: QuotaWindowState;
+  weekly: QuotaWindowState;
+}
+
+export interface ConnectedAccount {
+  id: string;
+  provider: ProviderId;
+  providerAccountId: string;
+  chatgptAccountId?: string | null;
+  displayName: string;
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  quotaSyncedAt?: string | null;
+  quotaSyncStatus?: "live" | "stale" | "unavailable";
+  quotaSyncError?: string | null;
+  planType?: string | null;
+  creditsBalance?: string | null;
+  quota: AccountQuotaState;
+}
+
+export interface ConnectorState {
+  apiKey: string;
+  createdAt: string;
+  lastRotatedAt: string;
+}
+
+export interface PersistedData {
+  connector: ConnectorState;
+  accounts: ConnectedAccount[];
+}
+
+export interface OAuthLinkedAccountPayload {
+  provider: ProviderId;
+  providerAccountId: string;
+  chatgptAccountId?: string | null;
+  displayName: string;
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: string;
+  quotaSyncedAt?: string | null;
+  quotaSyncStatus?: "live" | "stale" | "unavailable";
+  quotaSyncError?: string | null;
+  planType?: string | null;
+  creditsBalance?: string | null;
+  quota: {
+    fiveHourLimit: number;
+    fiveHourUsed?: number;
+    fiveHourMode?: QuotaWindowMode;
+    fiveHourWindowStartedAt?: string;
+    fiveHourResetsAt?: string | null;
+    weeklyLimit: number;
+    weeklyUsed?: number;
+    weeklyMode?: QuotaWindowMode;
+    weeklyWindowStartedAt?: string;
+    weeklyResetsAt?: string | null;
+  };
+}
+
+export interface DashboardQuotaWindow {
+  limit: number;
+  used: number;
+  mode?: QuotaWindowMode;
+  remaining: number;
+  remainingRatio: number;
+  resetsAt?: string | null;
+}
+
+export interface DashboardAccount {
+  id: string;
+  provider: ProviderId;
+  providerAccountId: string;
+  chatgptAccountId?: string | null;
+  displayName: string;
+  createdAt: string;
+  updatedAt: string;
+  quotaSyncedAt?: string | null;
+  quotaSyncStatus?: "live" | "stale" | "unavailable";
+  quotaSyncError?: string | null;
+  planType?: string | null;
+  creditsBalance?: string | null;
+  quota: {
+    fiveHour: DashboardQuotaWindow;
+    weekly: DashboardQuotaWindow;
+  };
+  routingScore: number;
+}
+
+export interface DashboardTotals {
+  fiveHourLimit: number;
+  fiveHourUsed: number;
+  fiveHourRemaining: number;
+  weeklyLimit: number;
+  weeklyUsed: number;
+  weeklyRemaining: number;
+}
+
+export interface DashboardPayload {
+  connector: ConnectorState;
+  totals: DashboardTotals;
+  bestAccount: DashboardAccount | null;
+  accounts: DashboardAccount[];
+}
+
+export interface RouteDecision {
+  routedTo: {
+    id: string;
+    provider: ProviderId;
+    providerAccountId: string;
+    displayName: string;
+  };
+  unitsConsumed: number;
+  quotaConsumed?: boolean;
+  authorizationHeader: string;
+  remaining: {
+    fiveHour: number;
+    weekly: number;
+  };
+}

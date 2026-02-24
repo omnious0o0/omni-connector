@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>omni-connector</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="/styles.css" />
+    <script
+      src="https://unpkg.com/lucide@0.575.0/dist/umd/lucide.min.js"
+      integrity="sha384-GzE8qT1LzDfRNjtvLN/dXDLPlJOB3BBom3Twb9/RwHkXCgNl6OU1pBxM9397HWGU"
+      crossorigin="anonymous"
+    ></script>
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo-box">
+            <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="16" y="16" width="6" height="6" rx="1"></rect>
+              <rect x="2" y="16" width="6" height="6" rx="1"></rect>
+              <rect x="9" y="2" width="6" height="6" rx="1"></rect>
+              <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"></path>
+              <path d="M12 12V8"></path>
+            </svg>
+          </div>
+          <div>
+            <h1 class="brand-title">omni-connector</h1>
+            <p class="brand-subtitle">multi-account router</p>
+          </div>
+          <button id="toggle-sidebar" class="btn btn-icon sidebar-toggle-btn" type="button" aria-label="Collapse panel" title="Collapse panel">
+            <i data-lucide="panel-left-close"></i>
+          </button>
+        </div>
+
+        <nav class="sidebar-nav">
+          <div class="sidebar-pages" role="tablist" aria-label="Workspace views">
+            <button
+              id="show-overview"
+              class="side-tab is-active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="dashboard-view"
+            >
+              <i data-lucide="layout-dashboard"></i>
+              <span>Overview</span>
+            </button>
+            <button
+              id="open-settings"
+              class="side-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-view"
+            >
+              <i data-lucide="settings-2"></i>
+              <span>Settings</span>
+            </button>
+          </div>
+
+          <div class="nav-actions">
+            <a id="oauth-connect-link" href="/auth/omni/start" class="btn btn-primary">
+              <i data-lucide="plus"></i> Connect Account
+            </a>
+            <button id="refresh-dashboard" class="btn btn-outline" type="button">
+              <i data-lucide="refresh-cw"></i> Refresh
+            </button>
+          </div>
+        </nav>
+      </aside>
+
+      <div
+        id="sidebar-resizer"
+        class="sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize side panel"
+        aria-valuemin="220"
+        aria-valuemax="420"
+        aria-valuenow="288"
+        tabindex="0"
+      ></div>
+
+      <main class="main-content">
+        <header class="page-header">
+          <div class="topbar-container">
+            <div class="topbar-left" aria-hidden="true"></div>
+            <div id="topbar-time" class="topbar-time">--:--:--</div>
+            <div id="topbar-status" class="topbar-status" data-state="preparing" role="status" aria-live="polite">
+              <span class="topbar-status-dot"></span>
+              <span id="topbar-status-text">Preparing</span>
+            </div>
+          </div>
+        </header>
+
+        <div id="dashboard-view" class="dashboard-grid" role="tabpanel" aria-labelledby="show-overview">
+          <div class="dashboard-left">
+            <section class="panel inventory-panel">
+              <header class="panel-header">
+                <div class="panel-title-group">
+                  <h2>Accounts</h2>
+                </div>
+              </header>
+              <div class="panel-body">
+                <div id="accounts-list" class="accounts-list">
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="dashboard-right">
+            <section class="metrics-grid">
+              <article class="metric-card">
+                <div class="metric-header">
+                  <i data-lucide="users"></i>
+                  <h3>Connected Accounts</h3>
+                </div>
+                <p id="metric-account-count" class="metric-value">0</p>
+                <p class="metric-caption">Available for routing</p>
+              </article>
+
+              <article class="metric-card">
+                <div class="metric-header">
+                  <i data-lucide="clock"></i>
+                  <h3>5h Quota</h3>
+                </div>
+                <p id="metric-five-hour" class="metric-value">0</p>
+                <p id="metric-five-hour-detail" class="metric-caption">0 / 0 limits</p>
+              </article>
+
+              <article class="metric-card">
+                <div class="metric-header">
+                  <i data-lucide="calendar"></i>
+                  <h3>Weekly Quota</h3>
+                </div>
+                <p id="metric-weekly" class="metric-value">0</p>
+                <p id="metric-weekly-detail" class="metric-caption">0 / 0 limits</p>
+              </article>
+
+              <article class="metric-card highlight-card">
+                <div class="metric-header">
+                  <i data-lucide="zap"></i>
+                  <h3>Current Best Route</h3>
+                </div>
+                <p id="metric-best-account" class="metric-value text-sm">None</p>
+                <p id="metric-best-score" class="metric-caption">Score 0%</p>
+              </article>
+            </section>
+
+            <section class="panel router-panel">
+              <header class="panel-header">
+                <div class="panel-title-group">
+                  <h2>Connector Access</h2>
+                </div>
+              </header>
+              
+              <div class="panel-body">
+                <div class="key-display">
+                  <div class="key-header">
+                    <span class="key-label">API KEY</span>
+                    <div class="key-actions">
+                      <button id="copy-key" class="btn btn-icon" type="button" aria-label="Copy Key" title="Copy Key">
+                        <i data-lucide="copy"></i>
+                      </button>
+                      <button
+                        id="toggle-key-visibility"
+                        class="btn btn-icon"
+                        type="button"
+                        aria-label="Toggle key visibility"
+                        title="Toggle key visibility"
+                      >
+                        <i data-lucide="eye-off"></i>
+                      </button>
+                      <button id="rotate-key" class="btn btn-icon text-warn" type="button" aria-label="Rotate Key" title="Rotate Key">
+                        <i data-lucide="refresh-ccw"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <code id="connector-key" class="mono-code">Loading...</code>
+                  <p id="key-access-note" class="key-note">Loading connector actions...</p>
+                </div>
+
+                <form id="route-test-form" class="router-form">
+                  <label for="route-units" class="form-label">Test Routing (Units)</label>
+                  <div class="form-group">
+                    <input id="route-units" name="units" type="number" min="1" max="1000" value="1" required class="custom-input" />
+                    <button type="submit" class="btn btn-secondary">
+                      Test Route
+                    </button>
+                  </div>
+                </form>
+
+                <div class="console-output">
+                  <pre id="route-result" class="console-body" aria-live="polite">Ready for routing simulation.</pre>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <section id="settings-view" class="settings-page" role="tabpanel" aria-labelledby="open-settings" hidden>
+          <div class="settings-page-head">
+            <h3>Workspace Settings</h3>
+            <p>Control privacy, layout density, and interaction behavior for this dashboard.</p>
+          </div>
+
+          <div class="settings-page-grid">
+            <section class="settings-card">
+              <h4>Privacy</h4>
+
+              <label class="settings-switch" for="settings-show-sensitive">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Show sensitive account details</p>
+                  <p class="settings-switch-note">Display full names, provider IDs, and workspace identifiers.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-show-sensitive" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <label class="settings-switch" for="settings-reveal-key">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Reveal API key by default</p>
+                  <p class="settings-switch-note">Keep the connector key fully visible until you hide it.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-reveal-key" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <label class="settings-switch" for="settings-mask-route-payload">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Mask route output payload</p>
+                  <p class="settings-switch-note">Hide sensitive values in the route simulation console output.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-mask-route-payload" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+            </section>
+
+            <section class="settings-card">
+              <h4>Layout</h4>
+
+              <label class="settings-switch" for="settings-compact-cards">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Compact account cards</p>
+                  <p class="settings-switch-note">Use tighter spacing for a denser 3-column account view.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-compact-cards" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <label class="settings-switch" for="settings-default-collapsed">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Start with side panel collapsed</p>
+                  <p class="settings-switch-note">Apply collapsed side panel state when this page loads.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-default-collapsed" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <button id="reset-layout" class="btn btn-outline" type="button">
+                <i data-lucide="panel-left"></i> Reset panel state
+              </button>
+            </section>
+
+            <section class="settings-card">
+              <h4>Interaction</h4>
+
+              <label class="settings-switch" for="settings-auto-refresh">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Auto refresh dashboard</p>
+                  <p class="settings-switch-note">Refresh usage and account status every 30 seconds.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-auto-refresh" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <label class="settings-switch" for="settings-confirm-removal">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Confirm before removing an account</p>
+                  <p class="settings-switch-note">Require explicit confirmation before account deletion.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-confirm-removal" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <label class="settings-switch" for="settings-remember-page-tab">
+                <div class="settings-switch-copy">
+                  <p class="settings-switch-title">Remember active sidebar tab</p>
+                  <p class="settings-switch-note">Restore the last selected page when reopening the app.</p>
+                </div>
+                <span class="switch-control">
+                  <input id="settings-remember-page-tab" type="checkbox" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </span>
+              </label>
+
+              <button id="reset-preferences" class="btn btn-outline" type="button">
+                <i data-lucide="rotate-ccw"></i> Reset all preferences
+              </button>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite">
+      <i data-lucide="info" class="toast-icon"></i>
+      <span class="toast-msg"></span>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

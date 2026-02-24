@@ -1,0 +1,52 @@
+{
+  "name": "omni-connector",
+  "version": "1.0.0",
+  "description": "Multi-account OpenAI quota monitor and connector router",
+  "main": "dist/src/server.js",
+  "bin": {
+    "omni-connector": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/**",
+    "public/**",
+    "scripts/install.sh",
+    "scripts/generate-data-encryption-key.mjs",
+    "docs/API.md",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "start": "node dist/src/cli.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "generate:data-key": "node scripts/generate-data-encryption-key.mjs"
+  },
+  "keywords": [
+    "omni-connector",
+    "codex",
+    "quota",
+    "oauth",
+    "connector",
+    "monitor"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "helmet": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/express-session": "^1.18.2",
+    "@types/node": "^25.3.0",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.2.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
