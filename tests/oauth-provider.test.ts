@@ -182,3 +182,13 @@ test("exchangeCodeFor gemini-cli uses post-auth project id override for Google p
     globalThis.fetch = originalFetch;
   }
 });
+
+test("redirectUriFor uses Google-compatible loopback callback for gemini", () => {
+  const service = createService({
+    oauthRedirectUri: "http://localhost:1455/auth/callback",
+  });
+
+  assert.equal(service.redirectUriFor("gemini", "gemini-cli"), "http://127.0.0.1:1455/oauth2callback");
+  assert.equal(service.redirectUriFor("gemini", "antigravity"), "http://127.0.0.1:1455/oauth2callback");
+  assert.equal(service.redirectUriFor("codex", "oauth"), "http://localhost:1455/auth/callback");
+});

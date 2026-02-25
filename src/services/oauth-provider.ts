@@ -450,6 +450,23 @@ const FALLBACK_MANUAL_WEEKLY_LIMIT = 500_000;
 export class OAuthProviderService {
   public constructor(private readonly config: AppConfig) {}
 
+  private providerRedirectPort(): string {
+    try {
+      const parsed = new URL(this.config.oauthRedirectUri);
+      if (parsed.port) {
+        return parsed.port;
+      }
+    } catch {
+    }
+
+    return String(this.config.port || 1455);
+  }
+
+  private geminiRedirectUri(): string {
+    const port = this.providerRedirectPort();
+    return `http://127.0.0.1:${port}/oauth2callback`;
+  }
+
   private profileConfigured(profile: OAuthProviderProfileConfig): boolean {
     return Boolean(profile.clientId && profile.authorizationUrl && profile.tokenUrl);
   }
@@ -474,6 +491,14 @@ export class OAuthProviderService {
 
   public redirectUri(): string {
     return this.config.oauthRedirectUri;
+  }
+
+  public redirectUriFor(providerId: ProviderId, _profileId: string): string {
+    if (providerId === "gemini") {
+      return this.geminiRedirectUri();
+    }
+
+    return this.redirectUri();
   }
 
   public isConfigured(): boolean {

@@ -273,12 +273,407 @@ interface OAuthProfileDefaults {
   clientSecret?: string;
 }
 
+interface OAuthClientCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+let cachedGeminiCliOAuthDiscoveryPath: string | null = null;
+let cachedGeminiCliOAuthCredentials: OAuthClientCredentials | null = null;
+let cachedAntigravityOAuthDiscoveryPath: string | null = null;
+let cachedAntigravityOAuthCredentials: OAuthClientCredentials | null = null;
+
+function isGoogleOAuthClientId(value: string): boolean {
+  return /^\d{8,}-[a-z0-9]+\.apps\.googleusercontent\.com$/i.test(value.trim());
+}
+
+function isGoogleOAuthClientSecret(value: string): boolean {
+  return /^GOCSPX-[A-Za-z0-9_-]+$/.test(value.trim());
+}
+
+function decodeBase64Utf8(value: string): string | null {
+  try {
+    const decoded = Buffer.from(value, "base64").toString("utf8").trim();
+    return decoded.length > 0 ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function parsePlainGoogleOAuthClientCredentials(source: string): OAuthClientCredentials | null {
+  const firstClientId = source.match(/\d{8,}-[a-z0-9]+\.apps\.googleusercontent\.com/i)?.[0] ?? null;
+  const firstClientSecret = source.match(/GOCSPX-[A-Za-z0-9_-]+/)?.[0] ?? null;
+  if (!firstClientId || !firstClientSecret) {
+    return null;
+  }
+
+  if (!isGoogleOAuthClientId(firstClientId) || !isGoogleOAuthClientSecret(firstClientSecret)) {
+    return null;
+  }
+
+  return {
+    clientId: firstClientId,
+    clientSecret: firstClientSecret,
+  };
+}
+
+function parseOpenClawAntigravityCredentials(source: string): OAuthClientCredentials | null {
+  const encodedClientId = source.match(/CLIENT_ID\s*=\s*decode\("([A-Za-z0-9+/=]+)"\)/)?.[1] ?? null;
+  const encodedClientSecret = source.match(/CLIENT_SECRET\s*=\s*decode\("([A-Za-z0-9+/=]+)"\)/)?.[1] ?? null;
+  if (!encodedClientId || !encodedClientSecret) {
+    return parsePlainGoogleOAuthClientCredentials(source);
+  }
+
+  const decodedClientId = decodeBase64Utf8(encodedClientId);
+  const decodedClientSecret = decodeBase64Utf8(encodedClientSecret);
+  if (!decodedClientId || !decodedClientSecret) {
+    return parsePlainGoogleOAuthClientCredentials(source);
+  }
+
+  if (!isGoogleOAuthClientId(decodedClientId) || !isGoogleOAuthClientSecret(decodedClientSecret)) {
+    return parsePlainGoogleOAuthClientCredentials(source);
+  }
+
+  return {
+    clientId: decodedClientId,
+    clientSecret: decodedClientSecret,
+  };
+}
+
+function parseDesktopAntigravityCredentials(source: string): OAuthClientCredentials | null {
+  const mappedClientId = source.match(/L6t="(\d{8,}-[a-z0-9]+\.apps\.googleusercontent\.com)"/i)?.[1] ?? null;
+  const mappedClientSecret = source.match(/B6t="(GOCSPX-[A-Za-z0-9_-]+)"/)?.[1] ?? null;
+  if (mappedClientId && mappedClientSecret) {
+    return {
+      clientId: mappedClientId,
+      clientSecret: mappedClientSecret,
+    };
+  }
+
+  return parsePlainGoogleOAuthClientCredentials(source);
+}
+
+function discoverAntigravityOAuthCredentials(pathValue: string | undefined): OAuthClientCredentials | null {
+  const normalizedPathValue = pathValue ?? "";
+  if (cachedAntigravityOAuthDiscoveryPath === normalizedPathValue) {
+    return cachedAntigravityOAuthCredentials;
+  }
+
+  type Candidate = {
+    sourcePath: string;
+    parser: "openclaw" | "desktop" | "plain";
+  };
+
+  const candidates: Candidate[] = [];
+
+  const openclawExecutablePath = findExecutableInPath(pathValue, ["openclaw"]);
+  if (openclawExecutablePath) {
+    try {
+      const resolvedOpenclawPath = fs.realpathSync(openclawExecutablePath);
+      const openclawRootPath = path.dirname(resolvedOpenclawPath);
+      candidates.push({
+        sourcePath: path.join(
+          openclawRootPath,
+          "node_modules",
+          "@mariozechner",
+          "pi-ai",
+          "dist",
+          "utils",
+          "oauth",
+          "google-antigravity.js",
+        ),
+        parser: "openclaw",
+      });
+      const discoveredOpenclawSourcePath = findFileByName(openclawRootPath, "google-antigravity.js", 10);
+      if (discoveredOpenclawSourcePath) {
+        candidates.push({
+          sourcePath: discoveredOpenclawSourcePath,
+          parser: "openclaw",
+        });
+      }
+    } catch {
+    }
+  }
+
+  const antigravityExecutablePath = findExecutableInPath(pathValue, ["antigravity", "gemini-antigravity"]);
+  if (antigravityExecutablePath) {
+    try {
+      const resolvedAntigravityPath = fs.realpathSync(antigravityExecutablePath);
+      const antigravityRootPath = path.dirname(path.dirname(resolvedAntigravityPath));
+      candidates.push({
+        sourcePath: path.join(antigravityRootPath, "resources", "app", "out", "main.js"),
+        parser: "desktop",
+      });
+    } catch {
+    }
+  }
+
+  const triedPaths = new Set<string>();
+  for (const candidate of candidates) {
+    if (triedPaths.has(candidate.sourcePath)) {
+      continue;
+    }
+    triedPaths.add(candidate.sourcePath);
+
+    if (!fs.existsSync(candidate.sourcePath)) {
+      continue;
+    }
+
+    let source: string;
+    try {
+      source = fs.readFileSync(candidate.sourcePath, "utf8");
+    } catch {
+      continue;
+    }
+
+    const parsedCredentials =
+      candidate.parser === "openclaw"
+        ? parseOpenClawAntigravityCredentials(source)
+        : candidate.parser === "desktop"
+          ? parseDesktopAntigravityCredentials(source)
+          : parsePlainGoogleOAuthClientCredentials(source);
+    if (!parsedCredentials) {
+      continue;
+    }
+
+    cachedAntigravityOAuthDiscoveryPath = normalizedPathValue;
+    cachedAntigravityOAuthCredentials = parsedCredentials;
+    return parsedCredentials;
+  }
+
+  cachedAntigravityOAuthDiscoveryPath = normalizedPathValue;
+  cachedAntigravityOAuthCredentials = null;
+  return null;
+}
+
+function findExecutableInPath(pathValue: string | undefined, commandNames: string[]): string | null {
+  const searchDirectories = (pathValue ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (searchDirectories.length === 0) {
+    return null;
+  }
+
+  const executableSuffixes = process.platform === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
+
+  for (const commandName of commandNames) {
+    for (const directory of searchDirectories) {
+      for (const suffix of executableSuffixes) {
+        const candidatePath = path.join(directory, `${commandName}${suffix}`);
+        if (fs.existsSync(candidatePath)) {
+          return candidatePath;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function findFileByName(directoryPath: string, fileName: string, maxDepth: number): string | null {
+  if (maxDepth < 0) {
+    return null;
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(directoryPath, entry.name);
+    if (entry.isFile() && entry.name === fileName) {
+      return entryPath;
+    }
+
+    if (entry.isDirectory() && !entry.name.startsWith(".")) {
+      const nestedResult = findFileByName(entryPath, fileName, maxDepth - 1);
+      if (nestedResult) {
+        return nestedResult;
+      }
+    }
+  }
+
+  return null;
+}
+
+function discoverGeminiCliOAuthCredentials(pathValue: string | undefined): OAuthClientCredentials | null {
+  const normalizedPathValue = pathValue ?? "";
+  if (cachedGeminiCliOAuthDiscoveryPath === normalizedPathValue) {
+    return cachedGeminiCliOAuthCredentials;
+  }
+
+  try {
+    const geminiExecutablePath = findExecutableInPath(pathValue, ["gemini", "gemini-cli"]);
+    if (!geminiExecutablePath) {
+      cachedGeminiCliOAuthDiscoveryPath = normalizedPathValue;
+      cachedGeminiCliOAuthCredentials = null;
+      return null;
+    }
+
+    const resolvedExecutablePath = fs.realpathSync(geminiExecutablePath);
+    const geminiRootPath = path.dirname(path.dirname(resolvedExecutablePath));
+    const candidateOauthPaths = [
+      path.join(
+        geminiRootPath,
+        "node_modules",
+        "@google",
+        "gemini-cli-core",
+        "dist",
+        "src",
+        "code_assist",
+        "oauth2.js",
+      ),
+      path.join(geminiRootPath, "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js"),
+    ];
+
+    let oauthSource: string | null = null;
+    for (const candidateOauthPath of candidateOauthPaths) {
+      if (fs.existsSync(candidateOauthPath)) {
+        oauthSource = fs.readFileSync(candidateOauthPath, "utf8");
+        break;
+      }
+    }
+
+    if (!oauthSource) {
+      const discoveredOauthPath = findFileByName(geminiRootPath, "oauth2.js", 9);
+      if (discoveredOauthPath) {
+        oauthSource = fs.readFileSync(discoveredOauthPath, "utf8");
+      }
+    }
+
+    if (!oauthSource) {
+      cachedGeminiCliOAuthDiscoveryPath = normalizedPathValue;
+      cachedGeminiCliOAuthCredentials = null;
+      return null;
+    }
+
+    const clientIdMatch = oauthSource.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/i);
+    const clientSecretMatch = oauthSource.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
+    if (!clientIdMatch || !clientSecretMatch) {
+      cachedGeminiCliOAuthDiscoveryPath = normalizedPathValue;
+      cachedGeminiCliOAuthCredentials = null;
+      return null;
+    }
+
+    const matchedClientId = clientIdMatch[1];
+    const matchedClientSecret = clientSecretMatch[1];
+    if (!matchedClientId || !matchedClientSecret) {
+      cachedGeminiCliOAuthDiscoveryPath = normalizedPathValue;
+      cachedGeminiCliOAuthCredentials = null;
+      return null;
+    }
+
+    cachedGeminiCliOAuthDiscoveryPath = normalizedPathValue;
+    cachedGeminiCliOAuthCredentials = {
+      clientId: matchedClientId,
+      clientSecret: matchedClientSecret,
+    };
+
+    return {
+      clientId: matchedClientId,
+      clientSecret: matchedClientSecret,
+    };
+  } catch {
+    cachedGeminiCliOAuthDiscoveryPath = normalizedPathValue;
+    cachedGeminiCliOAuthCredentials = null;
+    return null;
+  }
+}
+
+function resolveFirstNonEmptyEnv(env: NodeJS.ProcessEnv, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = nonEmptyEnvValue(env[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function resolveOAuthClientCredentials(
+  env: NodeJS.ProcessEnv,
+  prefix: string,
+  defaults: OAuthProfileDefaults,
+): OAuthClientCredentials {
+  const prefixedClientId = nonEmptyEnvValue(env[`${prefix}_OAUTH_CLIENT_ID`]);
+  const prefixedClientSecret = nonEmptyEnvValue(env[`${prefix}_OAUTH_CLIENT_SECRET`]);
+
+  let defaultClientId = defaults.clientId ?? "";
+  let defaultClientSecret = defaults.clientSecret ?? "";
+  const autoDiscoverGeminiOAuth = parseBoolean(env.GEMINI_OAUTH_AUTO_DISCOVER, true);
+
+  if (prefix === "GEMINI_CLI") {
+    const sharedGeminiClientId = resolveFirstNonEmptyEnv(env, [
+      "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+      "GEMINI_CLI_OAUTH_CLIENT_ID",
+    ]);
+    const sharedGeminiClientSecret = resolveFirstNonEmptyEnv(env, [
+      "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
+      "GEMINI_CLI_OAUTH_CLIENT_SECRET",
+    ]);
+
+    if (!defaultClientId && sharedGeminiClientId) {
+      defaultClientId = sharedGeminiClientId;
+    }
+    if (!defaultClientSecret && sharedGeminiClientSecret) {
+      defaultClientSecret = sharedGeminiClientSecret;
+    }
+
+    if (autoDiscoverGeminiOAuth && !defaultClientId) {
+      const discoveredGeminiCredentials = discoverGeminiCliOAuthCredentials(env.PATH);
+      if (discoveredGeminiCredentials) {
+        defaultClientId = discoveredGeminiCredentials.clientId;
+        if (!defaultClientSecret) {
+          defaultClientSecret = discoveredGeminiCredentials.clientSecret;
+        }
+      }
+    }
+  } else if (prefix === "GEMINI_ANTIGRAVITY") {
+    const sharedAntigravityClientId = resolveFirstNonEmptyEnv(env, [
+      "OPENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID",
+      "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID",
+    ]);
+    const sharedAntigravityClientSecret = resolveFirstNonEmptyEnv(env, [
+      "OPENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+      "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+    ]);
+
+    if (!defaultClientId && sharedAntigravityClientId) {
+      defaultClientId = sharedAntigravityClientId;
+    }
+    if (!defaultClientSecret && sharedAntigravityClientSecret) {
+      defaultClientSecret = sharedAntigravityClientSecret;
+    }
+
+    if (autoDiscoverGeminiOAuth && !defaultClientId) {
+      const discoveredAntigravityCredentials = discoverAntigravityOAuthCredentials(env.PATH);
+      if (discoveredAntigravityCredentials) {
+        defaultClientId = discoveredAntigravityCredentials.clientId;
+        if (!defaultClientSecret) {
+          defaultClientSecret = discoveredAntigravityCredentials.clientSecret;
+        }
+      }
+    }
+  }
+
+  return {
+    clientId: prefixedClientId ?? defaultClientId,
+    clientSecret: prefixedClientSecret ?? defaultClientSecret,
+  };
+}
+
 function parseOAuthProfileConfig(
   env: NodeJS.ProcessEnv,
   prefix: string,
   id: string,
   defaults: OAuthProfileDefaults,
 ): OAuthProviderProfileConfig {
+  const clientCredentials = resolveOAuthClientCredentials(env, prefix, defaults);
   const authorizationUrl = parseRequiredUrl(
     env[`${prefix}_OAUTH_AUTHORIZATION_URL`],
     defaults.authorizationUrl,
@@ -294,9 +689,8 @@ function parseOAuthProfileConfig(
       parseOptionalUrl(env[`${prefix}_OAUTH_USERINFO_URL`]) ??
       parseOptionalUrl(defaults.userInfoUrl ?? "") ??
       null,
-    clientId: nonEmptyEnvValue(env[`${prefix}_OAUTH_CLIENT_ID`]) ?? defaults.clientId ?? "",
-    clientSecret:
-      nonEmptyEnvValue(env[`${prefix}_OAUTH_CLIENT_SECRET`]) ?? defaults.clientSecret ?? "",
+    clientId: clientCredentials.clientId,
+    clientSecret: clientCredentials.clientSecret,
     scopes: parseScopes(nonEmptyEnvValue(env[`${prefix}_OAUTH_SCOPES`]) ?? defaults.scopes),
     originator:
       nonEmptyEnvValue(env[`${prefix}_OAUTH_ORIGINATOR`]) ?? defaults.originator ?? null,

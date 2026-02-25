@@ -134,7 +134,11 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     if (!dependencies.oauthProviderService.isOAuthProfileConfigured(providerId, profileId)) {
       const requiredClientIdEnv = resolveOAuthClientIdEnv(providerId, profileId);
       const message = requiredClientIdEnv
-        ? `OAuth profile is not configured for ${providerId}/${profileId}. Set ${requiredClientIdEnv} in .env and restart omni-connector.`
+        ? providerId === "gemini" && profileId === "gemini-cli"
+          ? `OAuth profile is not configured for ${providerId}/${profileId}. Install @google/gemini-cli so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+          : providerId === "gemini" && profileId === "antigravity"
+            ? `OAuth profile is not configured for ${providerId}/${profileId}. Install Antigravity or OpenClaw so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+          : `OAuth profile is not configured for ${providerId}/${profileId}. Set ${requiredClientIdEnv} in .env and restart omni-connector.`
         : `OAuth profile is not configured for ${providerId}/${profileId}.`;
       throw new HttpError(503, "oauth_not_configured", message);
     }
@@ -142,7 +146,7 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     const state = dependencies.oauthProviderService.createState();
     const codeVerifier = dependencies.oauthProviderService.createPkceVerifier();
     const codeChallenge = dependencies.oauthProviderService.createPkceChallenge(codeVerifier);
-    const redirectUri = dependencies.oauthProviderService.redirectUri();
+    const redirectUri = dependencies.oauthProviderService.redirectUriFor(providerId, profileId);
 
     pruneInMemoryPendingFlows();
     const pendingFlows = prunePendingFlows(req.session.oauthPendingFlows);
@@ -198,7 +202,7 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     handleOAuthStart(providerParam, profileId, req, res);
   });
 
-  router.get("/auth/callback", async (req, res) => {
+  const handleOAuthCallback = async (req: Request, res: Response) => {
     const state = req.query.state;
     const code = req.query.code;
     const oauthError = req.query.error;
@@ -257,7 +261,10 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     clearLegacyOAuthSessionState(req);
     req.session.dashboardAuthorized = true;
     res.redirect("/?connected=1");
-  });
+  };
+
+  router.get("/auth/callback", handleOAuthCallback);
+  router.get("/oauth2callback", handleOAuthCallback);
 
   return router;
 }

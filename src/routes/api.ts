@@ -138,6 +138,14 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
         const oauthOptions = oauthProfiles.map((profile) => {
           const envPrefix = profileEnvPrefixById.get(profile.id);
           const requiredClientIdEnv = envPrefix ? `${envPrefix}_OAUTH_CLIENT_ID` : null;
+          const configurationHint =
+            profile.configured || !requiredClientIdEnv
+              ? null
+              : provider.id === "gemini" && profile.id === "gemini-cli"
+                ? `Install @google/gemini-cli so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+                : provider.id === "gemini" && profile.id === "antigravity"
+                  ? `Install Antigravity or OpenClaw so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+                : `Set ${requiredClientIdEnv} in .env and restart omni-connector.`;
 
           return {
             id: profile.id,
@@ -145,10 +153,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
             configured: profile.configured,
             startPath: `/auth/${provider.id}/start?profile=${encodeURIComponent(profile.id)}`,
             requiredClientIdEnv,
-            configurationHint:
-              profile.configured || !requiredClientIdEnv
-                ? null
-                : `Set ${requiredClientIdEnv} in .env and restart omni-connector.`,
+            configurationHint,
           };
         });
         const firstConfigured = oauthOptions.find((option) => option.configured);

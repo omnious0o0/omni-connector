@@ -866,6 +866,22 @@ test("links distinct accounts even when OAuth workspace id is shared", async () 
 
 test("lists providers and links API-key account for non-OAuth provider", async () => {
   const temp = createTempDataPath();
+  const isolatedGeminiEnvKeys = [
+    "GEMINI_CLI_OAUTH_CLIENT_ID",
+    "GEMINI_CLI_OAUTH_CLIENT_SECRET",
+    "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID",
+    "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+    "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+    "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
+  ] as const;
+  const previousGeminiEnv = new Map<string, string | undefined>(
+    isolatedGeminiEnvKeys.map((key) => [key, process.env[key]]),
+  );
+  for (const key of isolatedGeminiEnvKeys) {
+    delete process.env[key];
+  }
+  const previousGeminiAutoDiscover = process.env.GEMINI_OAUTH_AUTO_DISCOVER;
+  process.env.GEMINI_OAUTH_AUTO_DISCOVER = "false";
 
   try {
     const app = createApp({
@@ -922,7 +938,13 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     assert.equal(geminiCliOption?.requiredClientIdEnv, "GEMINI_CLI_OAUTH_CLIENT_ID");
     assert.equal(
       geminiCliOption?.configurationHint,
-      "Set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+      "Install @google/gemini-cli so credentials are auto-discovered, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+    );
+    const geminiAntigravityOption = (geminiProvider?.oauthOptions ?? []).find((option) => option.id === "antigravity");
+    assert.equal(geminiAntigravityOption?.requiredClientIdEnv, "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID");
+    assert.equal(
+      geminiAntigravityOption?.configurationHint,
+      "Install Antigravity or OpenClaw so credentials are auto-discovered, or set GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
 
     const openRouterProvider = providers.find((provider) => provider.id === "openrouter");
@@ -949,7 +971,7 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     const geminiStart = await agent.get("/auth/gemini/start").expect(503);
     assert.equal(
       geminiStart.text,
-      "OAuth profile is not configured for gemini/gemini-cli. Set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+      "OAuth profile is not configured for gemini/gemini-cli. Install @google/gemini-cli so credentials are auto-discovered, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
     await agent.get("/auth/claude/start").expect(302);
 
@@ -980,6 +1002,18 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     assert.equal(routeResult.body.authorizationHeader, "Bearer gem-api-key-123");
     assert.equal(routeResult.body.quotaConsumed, true);
   } finally {
+    if (previousGeminiAutoDiscover === undefined) {
+      delete process.env.GEMINI_OAUTH_AUTO_DISCOVER;
+    } else {
+      process.env.GEMINI_OAUTH_AUTO_DISCOVER = previousGeminiAutoDiscover;
+    }
+    for (const [key, value] of previousGeminiEnv.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     temp.cleanup();
   }
 });

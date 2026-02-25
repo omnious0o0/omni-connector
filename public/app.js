@@ -1037,13 +1037,23 @@ function renderConnectProviderCards() {
             : "",
         )
         .filter((value) => value.length > 0);
+      const oauthConfigurationHints = oauthOptions
+        .map((option) =>
+          option && option.configured !== true && typeof option.configurationHint === "string"
+            ? option.configurationHint.trim()
+            : "",
+        )
+        .filter((value) => value.length > 0);
       const uniqueMissingOAuthEnvVars = [...new Set(missingOAuthEnvVars)];
+      const uniqueOAuthConfigurationHints = [...new Set(oauthConfigurationHints)];
       const apiButton = provider.supportsApiKey
         ? `<button class="btn btn-secondary" type="button" data-connect-api="${escapeHtml(provider.id)}">API Key</button>`
         : "";
       const oauthNotConfiguredMessage =
         provider.supportsOAuth && !provider.oauthConfigured
-          ? uniqueMissingOAuthEnvVars.length > 0
+          ? uniqueOAuthConfigurationHints.length > 0
+            ? uniqueOAuthConfigurationHints.join(" ")
+            : uniqueMissingOAuthEnvVars.length > 0
             ? `OAuth not configured. Set ${uniqueMissingOAuthEnvVars.join(", ")} in .env and restart omni-connector.`
             : "OAuth not configured for this provider."
           : null;
