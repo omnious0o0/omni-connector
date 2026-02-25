@@ -5,6 +5,9 @@ import { HttpError } from "../errors";
 import { OAuthLinkedAccountPayload, ProviderId, QuotaWindowMode } from "../types";
 import {
   buildClaudeAuthorizationCodeTokenPayload,
+  buildCodexOAuthProfile,
+  CODEX_OAUTH_PROFILE_ID,
+  codexUsageCandidateUrls,
   extractCodexRateLimitPayload,
   fetchGeminiCliProjectId,
 } from "./oauth-provider/index";
@@ -453,23 +456,7 @@ export class OAuthProviderService {
 
   private profilesFor(providerId: ProviderId): OAuthProviderProfileConfig[] {
     if (providerId === "codex") {
-      return [
-        {
-          id: "oauth",
-          label: this.config.oauthProviderName,
-          authorizationUrl: this.config.oauthAuthorizationUrl,
-          tokenUrl: this.config.oauthTokenUrl,
-          userInfoUrl: this.config.oauthUserInfoUrl,
-          clientId: this.config.oauthClientId,
-          clientSecret: this.config.oauthClientSecret,
-          scopes: this.config.oauthScopes,
-          originator: this.config.oauthOriginator,
-          extraParams: {
-            codex_cli_simplified_flow: "true",
-            id_token_add_organizations: "true",
-          },
-        },
-      ];
+      return [buildCodexOAuthProfile(this.config)];
     }
 
     return this.config.oauthProfiles[providerId] ?? [];
@@ -490,7 +477,7 @@ export class OAuthProviderService {
   }
 
   public isConfigured(): boolean {
-    const codexProfile = this.profilesFor("codex").find((profile) => profile.id === "oauth");
+    const codexProfile = this.profilesFor("codex").find((profile) => profile.id === CODEX_OAUTH_PROFILE_ID);
     return codexProfile ? this.profileConfigured(codexProfile) : false;
   }
 
@@ -565,7 +552,7 @@ export class OAuthProviderService {
   }
 
   public authorizationUrl(input: AuthorizationParamsInput): string {
-    return this.authorizationUrlFor("codex", "oauth", input);
+    return this.authorizationUrlFor("codex", CODEX_OAUTH_PROFILE_ID, input);
   }
 
   public authorizationUrlFor(
@@ -608,7 +595,7 @@ export class OAuthProviderService {
     redirectUri: string;
     codeVerifier: string;
   }): Promise<OAuthLinkedAccountPayload> {
-    return this.exchangeCodeFor("codex", "oauth", input);
+    return this.exchangeCodeFor("codex", CODEX_OAUTH_PROFILE_ID, input);
   }
 
   public async exchangeCodeFor(
@@ -621,7 +608,7 @@ export class OAuthProviderService {
       codeVerifier: string;
     },
   ): Promise<OAuthLinkedAccountPayload> {
-    if (providerId === "codex" && profileId === "oauth") {
+    if (providerId === "codex" && profileId === CODEX_OAUTH_PROFILE_ID) {
       return this.exchangeCodeCodex(input);
     }
 
@@ -793,7 +780,7 @@ export class OAuthProviderService {
 
     return {
       provider: "codex",
-      oauthProfileId: "oauth",
+      oauthProfileId: CODEX_OAUTH_PROFILE_ID,
       providerAccountId,
       chatgptAccountId,
       displayName,
@@ -1086,14 +1073,7 @@ export class OAuthProviderService {
       }
     }
 
-    const candidateUrls = [
-      "https://chatgpt.com/backend-api/wham/usage",
-      "https://chatgpt.com/backend-api/codex/wham/usage",
-    ];
-
-    if (this.config.oauthQuotaUrl) {
-      candidateUrls.unshift(this.config.oauthQuotaUrl);
-    }
+    const candidateUrls = codexUsageCandidateUrls(this.config.oauthQuotaUrl);
 
     let lastError: string | null = null;
 
