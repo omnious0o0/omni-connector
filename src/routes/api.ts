@@ -1,6 +1,6 @@
 import { Request, Router } from "express";
 import { HttpError } from "../errors";
-import { PROVIDER_CATALOG, isProviderId } from "../providers";
+import { PROVIDER_CATALOG, isProviderId, providerOAuthProfileDefinitions } from "../providers";
 import { ConnectorService } from "../services/connector";
 import { OAuthProviderService } from "../services/oauth-provider";
 import { ProviderUsageService } from "../services/provider-usage";
@@ -132,12 +132,25 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
       strictLiveQuota: dependencies.strictLiveQuota,
       providers: PROVIDER_CATALOG.map((provider) => {
         const oauthProfiles = dependencies.oauthProviderService.oauthProfiles(provider.id);
-        const oauthOptions = oauthProfiles.map((profile) => ({
-          id: profile.id,
-          label: profile.label,
-          configured: profile.configured,
-          startPath: `/auth/${provider.id}/start?profile=${encodeURIComponent(profile.id)}`,
-        }));
+        const profileEnvPrefixById = new Map(
+          providerOAuthProfileDefinitions(provider.id).map((definition) => [definition.id, definition.envPrefix]),
+        );
+        const oauthOptions = oauthProfiles.map((profile) => {
+          const envPrefix = profileEnvPrefixById.get(profile.id);
+          const requiredClientIdEnv = envPrefix ? `${envPrefix}_OAUTH_CLIENT_ID` : null;
+
+          return {
+            id: profile.id,
+            label: profile.label,
+            configured: profile.configured,
+            startPath: `/auth/${provider.id}/start?profile=${encodeURIComponent(profile.id)}`,
+            requiredClientIdEnv,
+            configurationHint:
+              profile.configured || !requiredClientIdEnv
+                ? null
+                : `Set ${requiredClientIdEnv} in .env and restart omni-connector.`,
+          };
+        });
         const firstConfigured = oauthOptions.find((option) => option.configured);
 
         return {

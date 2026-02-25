@@ -1030,12 +1030,26 @@ function renderConnectProviderCards() {
           return `<button class="btn btn-outline" type="button" data-connect-oauth-provider="${escapeHtml(provider.id)}" data-connect-oauth-option="${escapeHtml(option.id)}" ${disabled ? "disabled" : ""}>${escapeHtml(option.label)}</button>`;
         })
         .join("");
+      const missingOAuthEnvVars = oauthOptions
+        .map((option) =>
+          option && option.configured !== true && typeof option.requiredClientIdEnv === "string"
+            ? option.requiredClientIdEnv.trim()
+            : "",
+        )
+        .filter((value) => value.length > 0);
+      const uniqueMissingOAuthEnvVars = [...new Set(missingOAuthEnvVars)];
       const apiButton = provider.supportsApiKey
         ? `<button class="btn btn-secondary" type="button" data-connect-api="${escapeHtml(provider.id)}">API Key</button>`
         : "";
-      const note =
+      const oauthNotConfiguredMessage =
         provider.supportsOAuth && !provider.oauthConfigured
-          ? '<p class="connect-provider-note">OAuth not configured for this provider.</p>'
+          ? uniqueMissingOAuthEnvVars.length > 0
+            ? `OAuth not configured. Set ${uniqueMissingOAuthEnvVars.join(", ")} in .env and restart omni-connector.`
+            : "OAuth not configured for this provider."
+          : null;
+      const note =
+        oauthNotConfiguredMessage
+          ? `<p class="connect-provider-note">${escapeHtml(oauthNotConfiguredMessage)}</p>`
           : strictLiveQuotaEnabled && !provider.usageConfigured
             ? '<p class="connect-provider-note">Strict live quota mode: usage adapter not configured.</p>'
             : "";

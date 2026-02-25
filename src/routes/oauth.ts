@@ -1,6 +1,6 @@
 import { Request, Response, Router } from "express";
 import { HttpError } from "../errors";
-import { isProviderId } from "../providers";
+import { isProviderId, providerOAuthProfileDefinitions } from "../providers";
 import { ConnectorService } from "../services/connector";
 import { OAuthProviderService } from "../services/oauth-provider";
 import { ProviderId } from "../types";
@@ -121,8 +121,23 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     return "oauth";
   };
 
+  const resolveOAuthClientIdEnv = (providerId: ProviderId, profileId: string): string | null => {
+    const definition = providerOAuthProfileDefinitions(providerId).find((candidate) => candidate.id === profileId);
+    if (!definition) {
+      return null;
+    }
+
+    return `${definition.envPrefix}_OAUTH_CLIENT_ID`;
+  };
+
   const handleOAuthStart = (providerId: ProviderId, profileId: string, req: Request, res: Response) => {
-    dependencies.oauthProviderService.assertOAuthProfileConfigured(providerId, profileId);
+    if (!dependencies.oauthProviderService.isOAuthProfileConfigured(providerId, profileId)) {
+      const requiredClientIdEnv = resolveOAuthClientIdEnv(providerId, profileId);
+      const message = requiredClientIdEnv
+        ? `OAuth profile is not configured for ${providerId}/${profileId}. Set ${requiredClientIdEnv} in .env and restart omni-connector.`
+        : `OAuth profile is not configured for ${providerId}/${profileId}.`;
+      throw new HttpError(503, "oauth_not_configured", message);
+    }
 
     const state = dependencies.oauthProviderService.createState();
     const codeVerifier = dependencies.oauthProviderService.createPkceVerifier();

@@ -895,7 +895,13 @@ test("lists providers and links API-key account for non-OAuth provider", async (
       oauthConfigured: boolean;
       recommended?: boolean;
       warnings?: string[];
-      oauthOptions?: Array<{ id: string; configured: boolean; startPath: string }>;
+      oauthOptions?: Array<{
+        id: string;
+        configured: boolean;
+        startPath: string;
+        requiredClientIdEnv?: string | null;
+        configurationHint?: string | null;
+      }>;
     }>;
     const providerIds = new Set(providers.map((provider) => provider.id));
 
@@ -912,6 +918,12 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     const geminiOauthOptionIds = new Set((geminiProvider?.oauthOptions ?? []).map((option) => option.id));
     assert.equal(geminiOauthOptionIds.has("gemini-cli"), true);
     assert.equal(geminiOauthOptionIds.has("antigravity"), true);
+    const geminiCliOption = (geminiProvider?.oauthOptions ?? []).find((option) => option.id === "gemini-cli");
+    assert.equal(geminiCliOption?.requiredClientIdEnv, "GEMINI_CLI_OAUTH_CLIENT_ID");
+    assert.equal(
+      geminiCliOption?.configurationHint,
+      "Set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+    );
 
     const openRouterProvider = providers.find((provider) => provider.id === "openrouter");
     assert.equal(openRouterProvider?.recommended, true);
@@ -934,7 +946,11 @@ test("lists providers and links API-key account for non-OAuth provider", async (
       })
       .expect(201);
 
-    await agent.get("/auth/gemini/start").expect(503);
+    const geminiStart = await agent.get("/auth/gemini/start").expect(503);
+    assert.equal(
+      geminiStart.text,
+      "OAuth profile is not configured for gemini/gemini-cli. Set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+    );
     await agent.get("/auth/claude/start").expect(302);
 
     const dashboard = await agent
