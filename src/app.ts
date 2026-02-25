@@ -8,17 +8,50 @@ import { createApiRouter } from "./routes/api";
 import { createOAuthRouter } from "./routes/oauth";
 import { ConnectorService } from "./services/connector";
 import { OAuthProviderService } from "./services/oauth-provider";
+import { ProviderUsageService } from "./services/provider-usage";
+import { AccountRepository } from "./storage/account-repository";
 import { DataStore } from "./store";
 
+function isResolvedConfig(config: Partial<AppConfig>): config is AppConfig {
+  return (
+    typeof config.host === "string" &&
+    typeof config.port === "number" &&
+    typeof config.dataFilePath === "string" &&
+    typeof config.publicDir === "string" &&
+    typeof config.sessionSecret === "string" &&
+    typeof config.oauthRedirectUri === "string" &&
+    typeof config.oauthProviderName === "string" &&
+    typeof config.oauthAuthorizationUrl === "string" &&
+    typeof config.oauthTokenUrl === "string" &&
+    typeof config.oauthClientId === "string" &&
+    typeof config.oauthClientSecret === "string" &&
+    typeof config.oauthOriginator === "string" &&
+    Array.isArray(config.oauthScopes) &&
+    typeof config.providerUsage === "object" &&
+    config.providerUsage !== null &&
+    typeof config.oauthProfiles === "object" &&
+    config.oauthProfiles !== null
+  );
+}
+
 export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
-  const config: AppConfig = {
-    ...resolveConfig(),
-    ...overrides,
-  };
+  const config: AppConfig = isResolvedConfig(overrides)
+    ? overrides
+    : {
+        ...resolveConfig(),
+        ...overrides,
+      };
 
   const store = new DataStore(config.dataFilePath);
+  const accountRepository = new AccountRepository(store);
   const oauthProviderService = new OAuthProviderService(config);
-  const connectorService = new ConnectorService(store, oauthProviderService);
+  const providerUsageService = new ProviderUsageService(config);
+  const connectorService = new ConnectorService(
+    accountRepository,
+    oauthProviderService,
+    providerUsageService,
+    config.strictLiveQuota,
+  );
 
   const app = express();
   app.disable("x-powered-by");
@@ -64,7 +97,16 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
   });
 
   app.use(createOAuthRouter({ connectorService, oauthProviderService }));
-  app.use("/api", createApiRouter({ connectorService, oauthProviderService }));
+  app.use(
+    "/api",
+    createApiRouter({
+      connectorService,
+      oauthProviderService,
+      providerUsageService,
+      strictLiveQuota: config.strictLiveQuota,
+      allowRemoteDashboard: config.allowRemoteDashboard,
+    }),
+  );
 
   app.use(express.static(config.publicDir, { index: "index.html" }));
 

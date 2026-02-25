@@ -1,4 +1,9 @@
-export type ProviderId = "codex";
+export type ProviderId =
+  | "codex"
+  | "gemini"
+  | "claude"
+  | "openrouter";
+export type AccountAuthMethod = "oauth" | "api";
 export type QuotaWindowMode = "units" | "percent";
 
 export interface QuotaWindowState {
@@ -17,6 +22,8 @@ export interface AccountQuotaState {
 export interface ConnectedAccount {
   id: string;
   provider: ProviderId;
+  authMethod?: AccountAuthMethod;
+  oauthProfileId?: string;
   providerAccountId: string;
   chatgptAccountId?: string | null;
   displayName: string;
@@ -46,6 +53,8 @@ export interface PersistedData {
 
 export interface OAuthLinkedAccountPayload {
   provider: ProviderId;
+  authMethod?: Extract<AccountAuthMethod, "oauth">;
+  oauthProfileId?: string;
   providerAccountId: string;
   chatgptAccountId?: string | null;
   displayName: string;
@@ -71,6 +80,15 @@ export interface OAuthLinkedAccountPayload {
   };
 }
 
+export interface ApiLinkedAccountPayload {
+  provider: ProviderId;
+  providerAccountId: string;
+  displayName: string;
+  apiKey: string;
+  manualFiveHourLimit?: number;
+  manualWeeklyLimit?: number;
+}
+
 export interface DashboardQuotaWindow {
   limit: number;
   used: number;
@@ -83,6 +101,8 @@ export interface DashboardQuotaWindow {
 export interface DashboardAccount {
   id: string;
   provider: ProviderId;
+  authMethod?: AccountAuthMethod;
+  oauthProfileId?: string;
   providerAccountId: string;
   chatgptAccountId?: string | null;
   displayName: string;
@@ -120,6 +140,7 @@ export interface RouteDecision {
   routedTo: {
     id: string;
     provider: ProviderId;
+    authMethod?: AccountAuthMethod;
     providerAccountId: string;
     displayName: string;
   };

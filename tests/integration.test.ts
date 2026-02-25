@@ -7,6 +7,7 @@ import { AddressInfo } from "node:net";
 import test from "node:test";
 import supertest from "supertest";
 import { createApp } from "../src/app";
+import { resolveConfig } from "../src/config";
 
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DASHBOARD_CLIENT_HEADER = {
@@ -42,6 +43,8 @@ function readRequestBody(request: http.IncomingMessage): Promise<string> {
 
 interface MockOAuthServerOptions {
   sharedWorkspaceId?: string;
+  expectedClientId?: string;
+  quotaRateLimitMessage?: string;
   fixedIdentity?: {
     subject: string;
     name: string;
@@ -54,6 +57,8 @@ async function startMockOAuthServer(options: MockOAuthServerOptions = {}): Promi
   close: () => Promise<void>;
 }> {
   const sharedWorkspaceId = options.sharedWorkspaceId ?? null;
+  const expectedClientId = options.expectedClientId ?? OPENAI_CODEX_CLIENT_ID;
+  const quotaRateLimitMessage = options.quotaRateLimitMessage ?? null;
   const fixedIdentity = options.fixedIdentity ?? null;
   const codeRecords = new Map<
     string,
@@ -137,7 +142,7 @@ async function startMockOAuthServer(options: MockOAuthServerOptions = {}): Promi
         !codeRecord ||
         params.get("redirect_uri") !== codeRecord.redirectUri ||
         !params.get("code_verifier") ||
-        params.get("client_id") !== OPENAI_CODEX_CLIENT_ID
+        params.get("client_id") !== expectedClientId
       ) {
         response.writeHead(400, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "invalid_grant" }));
@@ -223,6 +228,18 @@ async function startMockOAuthServer(options: MockOAuthServerOptions = {}): Promi
         return;
       }
 
+      if (quotaRateLimitMessage) {
+        response.writeHead(429, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: quotaRateLimitMessage,
+            },
+          }),
+        );
+        return;
+      }
+
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
@@ -284,8 +301,87 @@ async function startMockOAuthServer(options: MockOAuthServerOptions = {}): Promi
   };
 }
 
-async function linkOAuthAccount(agent: ReturnType<typeof supertest.agent>): Promise<void> {
-  const oauthStart = await agent.get("/auth/omni/start").expect(302);
+interface MockUsageServerOptions {
+  responseDelayMs?: number;
+}
+
+async function startMockUsageServer(options: MockUsageServerOptions = {}): Promise<{
+  baseUrl: string;
+  close: () => Promise<void>;
+}> {
+  const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
+
+  const server = http.createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const host = request.headers.host ?? "127.0.0.1";
+    const url = new URL(request.url ?? "/", `http://${host}`);
+    const key = url.searchParams.get("key");
+
+    if (method !== "GET") {
+      response.writeHead(405, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+
+    if (!key || key !== "gem-live-key") {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
+    if (responseDelayMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, responseDelayMs);
+      });
+    }
+
+    if (url.pathname === "/usage/5h") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ used: 18, limit: 1000, plan_type: "enterprise" }));
+      return;
+    }
+
+    if (url.pathname === "/usage/7d") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ used: 125, limit: 8000, credits_balance: "73" }));
+      return;
+    }
+
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
+
+  const addressInfo = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${addressInfo.port}`;
+
+  return {
+    baseUrl,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function linkOAuthAccount(
+  agent: ReturnType<typeof supertest.agent>,
+  startPath: string = "/auth/omni/start",
+): Promise<void> {
+  const oauthStart = await agent.get(startPath).expect(302);
   const authorizationLocation = oauthStart.header.location;
   assert.ok(authorizationLocation);
 
@@ -302,6 +398,259 @@ async function linkOAuthAccount(agent: ReturnType<typeof supertest.agent>): Prom
     .expect(302)
     .expect("location", "/?connected=1");
 }
+
+test("supports codex OAuth start route alias", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: true,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await linkOAuthAccount(agent, "/auth/codex/start");
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboard.body.accounts.length, 1);
+    assert.equal(dashboard.body.accounts[0]?.provider, "codex");
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("accepts callback from earlier OAuth start when multiple starts were initiated", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: true,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    const firstStart = await agent.get("/auth/omni/start").expect(302);
+    const secondStart = await agent.get("/auth/omni/start").expect(302);
+
+    const firstAuthorizationLocation = firstStart.header.location;
+    const secondAuthorizationLocation = secondStart.header.location;
+    assert.ok(firstAuthorizationLocation);
+    assert.ok(secondAuthorizationLocation);
+
+    const firstAuthorizationUrl = new URL(firstAuthorizationLocation);
+    const secondAuthorizationUrl = new URL(secondAuthorizationLocation);
+
+    const firstAuthorizationResponse = await fetch(firstAuthorizationUrl, { redirect: "manual" });
+    assert.equal(firstAuthorizationResponse.status, 302);
+    const firstCallbackLocation = firstAuthorizationResponse.headers.get("location");
+    assert.ok(firstCallbackLocation);
+
+    await fetch(secondAuthorizationUrl, { redirect: "manual" });
+
+    const firstCallbackUrl = new URL(firstCallbackLocation);
+    await agent
+      .get(`${firstCallbackUrl.pathname}${firstCallbackUrl.search}`)
+      .expect(302)
+      .expect("location", "/?connected=1");
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboard.body.accounts.length, 1);
+    assert.equal(dashboard.body.accounts[0]?.provider, "codex");
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("completes OAuth callback without session cookie when pending state exists", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: true,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const startAgent = supertest.agent(app);
+    const oauthStart = await startAgent.get("/auth/omni/start").expect(302);
+    const authorizationLocation = oauthStart.header.location;
+    assert.ok(authorizationLocation);
+
+    const authorizationUrl = new URL(authorizationLocation);
+    const providerRedirectResponse = await fetch(authorizationUrl, { redirect: "manual" });
+    assert.equal(providerRedirectResponse.status, 302);
+
+    const callbackLocation = providerRedirectResponse.headers.get("location");
+    assert.ok(callbackLocation);
+    const callbackUrl = new URL(callbackLocation);
+
+    await supertest(app)
+      .get(`${callbackUrl.pathname}${callbackUrl.search}`)
+      .expect(302)
+      .expect("location", "/?connected=1");
+
+    const dashboard = await supertest(app)
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboard.body.accounts.length, 1);
+    assert.equal(dashboard.body.accounts[0]?.provider, "codex");
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("connects gemini through both OAuth options (Gemini CLI and Antigravity)", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer({ expectedClientId: "gemini-client-id" });
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...defaults.providerUsage,
+        gemini: {
+          ...defaults.providerUsage.gemini,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+      oauthProfiles: {
+        ...defaults.oauthProfiles,
+        gemini: [
+          {
+            id: "gemini-cli",
+            label: "Gemini CLI",
+            authorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+            tokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+            userInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+            clientId: "gemini-client-id",
+            clientSecret: "",
+            scopes: ["openid", "profile", "email"],
+            originator: null,
+            extraParams: {},
+          },
+          {
+            id: "antigravity",
+            label: "Antigravity",
+            authorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+            tokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+            userInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+            clientId: "gemini-client-id",
+            clientSecret: "",
+            scopes: ["openid", "profile", "email"],
+            originator: null,
+            extraParams: {},
+          },
+        ],
+      },
+    });
+
+    const agent = supertest.agent(app);
+    const providersResponse = await agent.get("/api/auth/providers").expect(200);
+    const geminiProvider = (providersResponse.body.providers as Array<{
+      id: string;
+      oauthConfigured: boolean;
+      oauthOptions: Array<{ id: string }>;
+    }>).find((provider) => provider.id === "gemini");
+
+    assert.equal(geminiProvider?.oauthConfigured, true);
+    assert.equal((geminiProvider?.oauthOptions ?? []).length, 2);
+
+    await linkOAuthAccount(agent, "/auth/gemini/start?profile=gemini-cli");
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboard.body.accounts.length, 1);
+    assert.equal(dashboard.body.accounts[0]?.provider, "gemini");
+    assert.equal(dashboard.body.accounts[0]?.authMethod, "oauth");
+    assert.equal(dashboard.body.accounts[0]?.oauthProfileId, "gemini-cli");
+
+    const connectorKey = dashboard.body.connector.apiKey as string;
+    const routeResult = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 1 })
+      .expect(200);
+
+    assert.equal(routeResult.body.routedTo.provider, "gemini");
+    assert.match(routeResult.body.authorizationHeader, /^Bearer mock-access-/);
+
+    await agent.get("/auth/gemini/start?profile=antigravity").expect(302);
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
 
 test("connects account through external OAuth provider and routes by connector key", async () => {
   const temp = createTempDataPath();
@@ -424,6 +773,50 @@ test("connects account through external OAuth provider and routes by connector k
   }
 });
 
+test("uses Codex 429 fallback parsing when live quota endpoint is rate limited", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer({
+    quotaRateLimitMessage: "Rate limit reached, try again in 3h 42m",
+  });
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: true,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await linkOAuthAccount(agent);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const account = dashboard.body.accounts[0];
+
+    assert.equal(account?.quotaSyncStatus, "live");
+    assert.equal(account?.quota?.fiveHour?.mode, "percent");
+    assert.equal(account?.quota?.weekly?.mode, "percent");
+    assert.equal(account?.quota?.fiveHour?.used, 100);
+    assert.equal(account?.quota?.weekly?.used, 100);
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
 test("links distinct accounts even when OAuth workspace id is shared", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer({ sharedWorkspaceId: "workspace-shared" });
@@ -467,6 +860,391 @@ test("links distinct accounts even when OAuth workspace id is shared", async () 
     assert.equal(new Set(accounts.map((account) => account.chatgptAccountId ?? null)).size, 1);
   } finally {
     await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("lists providers and links API-key account for non-OAuth provider", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthAuthorizationUrl: "https://auth.openai.com/oauth/authorize",
+      oauthTokenUrl: "https://auth.openai.com/oauth/token",
+      oauthUserInfoUrl: null,
+      oauthQuotaUrl: null,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+
+    const providersResponse = await agent.get("/api/auth/providers").expect(200);
+    const providers = providersResponse.body.providers as Array<{
+      id: string;
+      supportsOAuth: boolean;
+      supportsApiKey: boolean;
+      oauthConfigured: boolean;
+      recommended?: boolean;
+      warnings?: string[];
+      oauthOptions?: Array<{ id: string; configured: boolean; startPath: string }>;
+    }>;
+    const providerIds = new Set(providers.map((provider) => provider.id));
+
+    assert.deepEqual(
+      [...providerIds].sort(),
+      ["claude", "codex", "gemini", "openrouter"],
+    );
+
+    const geminiProvider = providers.find((provider) => provider.id === "gemini");
+    assert.equal(geminiProvider?.supportsOAuth, true);
+    assert.equal(geminiProvider?.oauthConfigured, false);
+    assert.equal(geminiProvider?.supportsApiKey, true);
+    assert.equal((geminiProvider?.warnings?.length ?? 0) > 0, true);
+    const geminiOauthOptionIds = new Set((geminiProvider?.oauthOptions ?? []).map((option) => option.id));
+    assert.equal(geminiOauthOptionIds.has("gemini-cli"), true);
+    assert.equal(geminiOauthOptionIds.has("antigravity"), true);
+
+    const openRouterProvider = providers.find((provider) => provider.id === "openrouter");
+    assert.equal(openRouterProvider?.recommended, true);
+
+    const claudeProvider = providers.find((provider) => provider.id === "claude");
+    assert.equal(claudeProvider?.supportsOAuth, true);
+    assert.equal(claudeProvider?.oauthConfigured, true);
+    assert.equal(claudeProvider?.supportsApiKey, true);
+    const claudeOauthOptionIds = new Set((claudeProvider?.oauthOptions ?? []).map((option) => option.id));
+    assert.equal(claudeOauthOptionIds.has("claude-code"), true);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Workspace",
+        providerAccountId: "gemini-primary",
+        apiKey: "gem-api-key-123",
+      })
+      .expect(201);
+
+    await agent.get("/auth/gemini/start").expect(503);
+    await agent.get("/auth/claude/start").expect(302);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const linkedAccount = dashboard.body.accounts[0] as {
+      provider: string;
+      authMethod?: string;
+      providerAccountId: string;
+    };
+
+    assert.equal(dashboard.body.accounts.length, 1);
+    assert.equal(linkedAccount.provider, "gemini");
+    assert.equal(linkedAccount.authMethod, "api");
+    assert.equal(linkedAccount.providerAccountId, "gemini-primary");
+
+    const connectorKey = dashboard.body.connector.apiKey as string;
+    const routeResult = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 2 })
+      .expect(200);
+
+    assert.equal(routeResult.body.routedTo.provider, "gemini");
+    assert.equal(routeResult.body.routedTo.authMethod, "api");
+    assert.equal(routeResult.body.authorizationHeader, "Bearer gem-api-key-123");
+    assert.equal(routeResult.body.quotaConsumed, true);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("enforces strict live quota mode when provider usage adapter is missing", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: true,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Strict",
+        providerAccountId: "gemini-strict",
+        apiKey: "gemini-key-strict",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboard.body.accounts[0]?.quotaSyncStatus, "unavailable");
+
+    const connectorKey = dashboard.body.connector.apiKey as string;
+    const route = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 1 })
+      .expect(503);
+
+    assert.equal(route.body.error, "strict_live_quota_required");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("requires OAuth session authorization when remote dashboard mode is enabled", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      allowRemoteDashboard: true,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await agent.get("/api/dashboard").set(DASHBOARD_CLIENT_HEADER).expect(401);
+
+    await linkOAuthAccount(agent);
+
+    await agent.get("/api/dashboard").set(DASHBOARD_CLIENT_HEADER).expect(200);
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("routes in strict live mode when provider usage adapter is configured", async () => {
+  const temp = createTempDataPath();
+  const mockUsage = await startMockUsageServer();
+
+  try {
+    const providerUsage = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    }).providerUsage;
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: true,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...providerUsage,
+        gemini: {
+          ...providerUsage.gemini,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: `${mockUsage.baseUrl}/usage/5h`,
+          weeklyUrl: `${mockUsage.baseUrl}/usage/7d`,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Live",
+        providerAccountId: "gemini-live",
+        apiKey: "gem-live-key",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const account = dashboard.body.accounts[0];
+
+    assert.equal(account?.quotaSyncStatus, "live");
+    assert.equal(account?.quota?.fiveHour?.limit, 1000);
+    assert.equal(account?.quota?.fiveHour?.used, 18);
+    assert.equal(account?.quota?.weekly?.limit, 8000);
+    assert.equal(account?.quota?.weekly?.used, 125);
+
+    const connectorKey = dashboard.body.connector.apiKey as string;
+    const route = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 2 })
+      .expect(200);
+
+    assert.equal(route.body.routedTo.provider, "gemini");
+    assert.equal(route.body.quotaConsumed, false);
+  } finally {
+    await mockUsage.close();
+    temp.cleanup();
+  }
+});
+
+test("returns dashboard quickly while slow quota sync continues in background", async () => {
+  const temp = createTempDataPath();
+  const mockUsage = await startMockUsageServer({ responseDelayMs: 2000 });
+
+  const now = new Date().toISOString();
+  const staleTime = "2000-01-01T00:00:00.000Z";
+  const seededStore = {
+    connector: {
+      apiKey: "cxk_seeded_slow_sync",
+      createdAt: now,
+      lastRotatedAt: now,
+    },
+    accounts: [
+      {
+        id: "acc_slow_sync",
+        provider: "gemini",
+        authMethod: "api",
+        providerAccountId: "gemini-slow",
+        chatgptAccountId: null,
+        displayName: "Gemini Slow",
+        accessToken: "gem-live-key",
+        refreshToken: null,
+        tokenExpiresAt: "2999-01-01T00:00:00.000Z",
+        createdAt: now,
+        updatedAt: now,
+        quotaSyncedAt: staleTime,
+        quotaSyncStatus: "stale",
+        quotaSyncError: null,
+        planType: null,
+        creditsBalance: null,
+        quota: {
+          fiveHour: {
+            limit: 1000,
+            used: 0,
+            mode: "units",
+            windowStartedAt: staleTime,
+            resetsAt: null,
+          },
+          weekly: {
+            limit: 8000,
+            used: 0,
+            mode: "units",
+            windowStartedAt: staleTime,
+            resetsAt: null,
+          },
+        },
+      },
+    ],
+  };
+
+  fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+  try {
+    const providerUsage = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    }).providerUsage;
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: false,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...providerUsage,
+        gemini: {
+          ...providerUsage.gemini,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: `${mockUsage.baseUrl}/usage/5h`,
+          weeklyUrl: `${mockUsage.baseUrl}/usage/7d`,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    const startedAt = Date.now();
+    const dashboardFast = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(dashboardFast.body.accounts.length, 1);
+    assert.ok(elapsedMs < 1500, `dashboard request took ${elapsedMs}ms`);
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 2300);
+    });
+
+    const dashboardSynced = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboardSynced.body.accounts[0]?.quotaSyncStatus, "live");
+    assert.equal(dashboardSynced.body.accounts[0]?.quota?.fiveHour?.used, 18);
+    assert.equal(dashboardSynced.body.accounts[0]?.quota?.weekly?.used, 125);
+  } finally {
+    await mockUsage.close();
     temp.cleanup();
   }
 });

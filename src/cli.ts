@@ -20,7 +20,9 @@ function readPackageVersion(packageRoot: string): string {
     if (typeof parsed.version === "string" && parsed.version.trim()) {
       return parsed.version;
     }
-  } catch {}
+  } catch {
+    return "0.0.0";
+  }
 
   return "0.0.0";
 }
@@ -65,6 +67,7 @@ function printHelp(): void {
       "",
       "Environment defaults when unset:",
       "  HOST=127.0.0.1",
+      "  ALLOW_REMOTE_DASHBOARD=false",
       "  PORT=1455",
       "  DATA_FILE=~/.omni-connector/data/store.json",
       "  SESSION_SECRET_FILE=~/.omni-connector/data/store.json.session",

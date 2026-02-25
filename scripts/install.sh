@@ -41,6 +41,7 @@ require_command node
 repo="${OMNI_CONNECTOR_REPO:-omnious0o0/omni-connector}"
 ref="${OMNI_CONNECTOR_REF:-main}"
 archive_url="${OMNI_CONNECTOR_ARCHIVE_URL:-https://codeload.github.com/${repo}/tar.gz/${ref}}"
+archive_sha256="${OMNI_CONNECTOR_ARCHIVE_SHA256:-}"
 install_target="${OMNI_CONNECTOR_INSTALL_TARGET:-}"
 
 download_file() {
@@ -61,12 +62,57 @@ download_file() {
   exit 1
 }
 
+compute_sha256() {
+  local target_path="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$target_path" | awk '{print $1}'
+    return
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$target_path" | awk '{print $1}'
+    return
+  fi
+
+  printf "%bError:%b sha256sum or shasum is required for checksum verification.\n" "${bold}" "${reset}" >&2
+  exit 1
+}
+
+verify_archive_checksum_if_configured() {
+  local archive_path="$1"
+  local expected_checksum="$2"
+
+  if [[ -z "$expected_checksum" ]]; then
+    return
+  fi
+
+  local expected_lower
+  expected_lower="$(printf "%s" "$expected_checksum" | tr '[:upper:]' '[:lower:]')"
+  if [[ ! "$expected_lower" =~ ^[0-9a-f]{64}$ ]]; then
+    printf "%bError:%b OMNI_CONNECTOR_ARCHIVE_SHA256 must be a 64-character hex string.\n" "${bold}" "${reset}" >&2
+    exit 1
+  fi
+
+  local actual_checksum
+  actual_checksum="$(compute_sha256 "$archive_path")"
+  if [[ "$actual_checksum" != "$expected_lower" ]]; then
+    printf "%bError:%b archive checksum mismatch.\n" "${bold}" "${reset}" >&2
+    printf "Expected: %s\n" "$expected_lower" >&2
+    printf "Actual:   %s\n" "$actual_checksum" >&2
+    exit 1
+  fi
+}
+
 if [[ "${OMNI_CONNECTOR_INSTALLER_DRY_RUN:-0}" == "1" ]]; then
   print_step "Dry run enabled"
   if [[ -n "${install_target}" ]]; then
     printf "Would run: npm install -g %s\n" "${install_target}"
   else
     printf "Would download source archive: %s\n" "${archive_url}"
+    if [[ -n "${archive_sha256}" ]]; then
+      printf "Would verify SHA-256: %s\n" "${archive_sha256}"
+    fi
     printf "Would run: npm --prefix <source> install --include=dev --no-audit --no-fund\n"
     printf "Would run: npm --prefix <source> run build\n"
     printf "Would run: npm install -g --ignore-scripts <source>\n"
@@ -83,6 +129,12 @@ else
 
   require_command tar
 
+  default_archive_url="https://codeload.github.com/${repo}/tar.gz/${ref}"
+  if [[ "${archive_url}" != "${default_archive_url}" && -z "${archive_sha256}" ]]; then
+    printf "%bError:%b custom OMNI_CONNECTOR_ARCHIVE_URL requires OMNI_CONNECTOR_ARCHIVE_SHA256 for verification.\n" "${bold}" "${reset}" >&2
+    exit 1
+  fi
+
   tmp_dir="$(mktemp -d)"
   cleanup_tmp() {
     rm -rf "${tmp_dir}"
@@ -91,6 +143,7 @@ else
 
   archive_path="${tmp_dir}/omni-connector.tar.gz"
   download_file "${archive_url}" "${archive_path}"
+  verify_archive_checksum_if_configured "${archive_path}" "${archive_sha256}"
   tar -xzf "${archive_path}" -C "${tmp_dir}"
 
   source_dir="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"

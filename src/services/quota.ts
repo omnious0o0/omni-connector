@@ -114,6 +114,8 @@ export function toDashboardAccount(account: ConnectedAccount): DashboardAccount 
   return {
     id: account.id,
     provider: account.provider,
+    authMethod: account.authMethod ?? "oauth",
+    oauthProfileId: account.oauthProfileId,
     providerAccountId: account.providerAccountId,
     chatgptAccountId: account.chatgptAccountId ?? null,
     displayName: account.displayName,

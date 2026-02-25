@@ -65,9 +65,9 @@
           </div>
 
           <div class="nav-actions">
-            <a id="oauth-connect-link" href="/auth/omni/start" class="btn btn-primary">
-              <i data-lucide="plus"></i> Connect Account
-            </a>
+            <button id="connect-trigger" class="btn btn-primary" type="button">
+              <i data-lucide="plus"></i> Connect
+            </button>
             <button id="refresh-dashboard" class="btn btn-outline" type="button">
               <i data-lucide="refresh-cw"></i> Refresh
             </button>
@@ -326,6 +326,58 @@
     <div id="toast" class="toast" aria-live="polite">
       <i data-lucide="info" class="toast-icon"></i>
       <span class="toast-msg"></span>
+    </div>
+
+    <div id="connect-modal" class="connect-modal" hidden>
+      <div class="connect-modal-backdrop" data-close-connect-modal></div>
+      <section
+        class="connect-modal-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-modal-title"
+      >
+        <header class="connect-modal-header">
+          <div>
+            <h3 id="connect-modal-title">Connect</h3>
+            <p>Choose a provider and auth method.</p>
+          </div>
+          <button id="connect-modal-close" class="btn btn-icon" type="button" aria-label="Close connect dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div id="connect-provider-list" class="connect-provider-list" aria-live="polite"></div>
+
+        <form id="api-link-form" class="connect-api-form" hidden>
+          <h4 id="api-link-title">Link API key</h4>
+          <p id="api-link-provider" class="connect-api-provider">Provider</p>
+          <label for="api-link-display-name" class="form-label">Display name</label>
+          <input id="api-link-display-name" name="displayName" type="text" class="custom-input" maxlength="120" />
+
+          <label for="api-link-provider-account-id" class="form-label">Provider account ID (optional)</label>
+          <input
+            id="api-link-provider-account-id"
+            name="providerAccountId"
+            type="text"
+            class="custom-input"
+            maxlength="160"
+          />
+
+          <label for="api-link-key" class="form-label">API key</label>
+          <input id="api-link-key" name="apiKey" type="password" class="custom-input" autocomplete="off" required />
+
+          <label for="api-link-manual-5h" class="form-label">Manual 5h limit (fallback)</label>
+          <input id="api-link-manual-5h" name="manualFiveHourLimit" type="number" min="0" class="custom-input" />
+
+          <label for="api-link-manual-7d" class="form-label">Manual weekly limit (fallback)</label>
+          <input id="api-link-manual-7d" name="manualWeeklyLimit" type="number" min="0" class="custom-input" />
+
+          <div class="connect-api-actions">
+            <button id="api-link-cancel" class="btn btn-outline" type="button">Back</button>
+            <button id="api-link-submit" class="btn btn-secondary" type="submit">Link API Key</button>
+          </div>
+        </form>
+      </section>
     </div>
 
     <script type="module" src="/app.js"></script>

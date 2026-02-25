@@ -844,6 +844,167 @@ body.accounts-density-comfortable .account-card {
   color: var(--text-muted);
 }
 
+.connect-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 180;
+  display: grid;
+  place-items: center;
+}
+
+.connect-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 6, 8, 0.74);
+  backdrop-filter: blur(2px);
+}
+
+.connect-modal-panel {
+  position: relative;
+  width: min(760px, calc(100vw - 24px));
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  background: linear-gradient(180deg, #15171c 0%, #101216 100%);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.52);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.connect-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.connect-modal-header h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.connect-modal-header p {
+  margin-top: 2px;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.connect-provider-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.connect-provider-card {
+  border: 1px solid var(--border-light);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.connect-provider-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.connect-provider-head-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connect-provider-head h4 {
+  font-size: 0.93rem;
+  font-weight: 600;
+}
+
+.connect-provider-tag {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  border: 1px solid var(--border-light);
+  padding: 2px 6px;
+}
+
+.connect-provider-recommended {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--positive-base);
+  border: 1px solid var(--positive-border);
+  background: var(--positive-bg);
+  padding: 2px 6px;
+}
+
+.connect-provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connect-provider-note {
+  font-size: 0.77rem;
+  color: var(--text-dim);
+}
+
+.connect-provider-warning {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connect-provider-warning p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #fca5a5;
+}
+
+.connect-provider-empty {
+  border: 1px dashed var(--border-strong);
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connect-api-form {
+  border: 1px solid var(--border-light);
+  background: rgba(255, 255, 255, 0.015);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connect-api-form h4 {
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.connect-api-provider {
+  margin-bottom: 2px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.connect-api-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .settings-page {
   display: flex;
   flex-direction: column;
@@ -1074,6 +1235,10 @@ body.accounts-density-comfortable .account-card {
   }
 
   .settings-page-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .connect-provider-list {
     grid-template-columns: 1fr;
   }
 

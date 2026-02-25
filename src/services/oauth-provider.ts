@@ -1,12 +1,26 @@
 import crypto from "node:crypto";
-import { AppConfig } from "../config";
+import { spawn } from "node:child_process";
+import { AppConfig, OAuthProviderProfileConfig } from "../config";
 import { HttpError } from "../errors";
-import { OAuthLinkedAccountPayload, QuotaWindowMode } from "../types";
+import { OAuthLinkedAccountPayload, ProviderId, QuotaWindowMode } from "../types";
+import {
+  buildClaudeAuthorizationCodeTokenPayload,
+  extractCodexRateLimitPayload,
+  fetchGeminiCliProjectId,
+} from "./oauth-provider/index";
+
+export { extractGeminiCliProjectId } from "./oauth-provider/index";
 
 interface AuthorizationParamsInput {
   state: string;
   redirectUri: string;
   codeChallenge: string;
+}
+
+interface OAuthProfileMetadata {
+  id: string;
+  label: string;
+  configured: boolean;
 }
 
 interface TokenPayload {
@@ -102,6 +116,29 @@ function pickString(record: Record<string, unknown>, keys: string[]): string | u
   }
 
   return undefined;
+}
+
+function oauthErrorSummary(record: Record<string, unknown>): string | null {
+  const errorRecord = asRecord(record.error);
+  const errorCode =
+    asString(record.error) ?? asString(record.code) ?? asString(errorRecord?.type ?? errorRecord?.code) ?? null;
+
+  const errorDescription =
+    asString(record.error_description) ??
+    asString(record.errorDescription) ??
+    asString(record.message) ??
+    asString(errorRecord?.message) ??
+    null;
+
+  if (errorCode && errorDescription) {
+    return `${errorCode}: ${errorDescription}`;
+  }
+
+  if (errorDescription) {
+    return errorDescription;
+  }
+
+  return errorCode;
 }
 
 function pickNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
@@ -247,13 +284,18 @@ function ensureHttpsUrl(rawUrl: string): string {
 }
 
 function parseRateLimitWindowCandidate(record: Record<string, unknown>): RateLimitWindowCandidate | null {
-  const usedPercent = asNumber(record.used_percent);
+  const usedPercent = asNumber(record.used_percent ?? record.usedPercent);
   if (usedPercent === undefined) {
     return null;
   }
 
-  const limitWindowSeconds = asNumber(record.limit_window_seconds);
-  const limitWindowMinutes = asNumber(record.limit_window_minutes);
+  const limitWindowSeconds = asNumber(record.limit_window_seconds ?? record.limitWindowSeconds);
+  const limitWindowMinutes = asNumber(
+    record.limit_window_minutes ??
+      record.limitWindowMinutes ??
+      record.windowDurationMins ??
+      record.window_duration_mins,
+  );
   const windowMinutes =
     limitWindowMinutes !== undefined
       ? Math.round(limitWindowMinutes)
@@ -261,8 +303,8 @@ function parseRateLimitWindowCandidate(record: Record<string, unknown>): RateLim
         ? Math.round(limitWindowSeconds / 60)
         : null;
 
-  const explicitResetAt = asNumber(record.reset_at);
-  const resetAfterSeconds = asNumber(record.reset_after_seconds);
+  const explicitResetAt = asNumber(record.reset_at ?? record.resetAt ?? record.resetsAt ?? record.resets_at);
+  const resetAfterSeconds = asNumber(record.reset_after_seconds ?? record.resetAfterSeconds);
   const resetsAtEpochSeconds =
     explicitResetAt !== undefined
       ? Math.round(explicitResetAt)
@@ -346,19 +388,134 @@ function toLiveQuotaWindow(window: RateLimitWindowCandidate): LiveQuotaWindow {
   };
 }
 
+function parseRetryAfterSecondsFromRateLimitError(rawMessage: string): number | null {
+  if (!rawMessage.trim()) {
+    return null;
+  }
+
+  const match = /try again in\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?/i.exec(rawMessage);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number.parseInt(match[1] ?? "0", 10);
+  const minutes = Number.parseInt(match[2] ?? "0", 10);
+  const seconds = Number.parseInt(match[3] ?? "0", 10);
+  const retryAfterSeconds =
+    Math.max(Number.isNaN(hours) ? 0 : hours, 0) * 60 * 60 +
+    Math.max(Number.isNaN(minutes) ? 0 : minutes, 0) * 60 +
+    Math.max(Number.isNaN(seconds) ? 0 : seconds, 0);
+
+  return retryAfterSeconds > 0 ? retryAfterSeconds : null;
+}
+
+function buildRateLimitPayloadFromRetryAfter(retryAfterSeconds: number): Record<string, unknown> {
+  const nowEpochSeconds = Math.floor(Date.now() / 1000);
+  const resetsAt = nowEpochSeconds + retryAfterSeconds;
+
+  return {
+    rate_limit: {
+      primary_window: {
+        used_percent: 100,
+        limit_window_minutes: 300,
+        reset_after_seconds: retryAfterSeconds,
+        reset_at: resetsAt,
+      },
+      secondary_window: {
+        used_percent: 100,
+        limit_window_minutes: 10_080,
+        reset_after_seconds: retryAfterSeconds,
+        reset_at: resetsAt,
+      },
+    },
+    additional_rate_limits: [],
+  };
+}
+
+function errnoCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return null;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+const FALLBACK_MANUAL_FIVE_HOUR_LIMIT = 50_000;
+const FALLBACK_MANUAL_WEEKLY_LIMIT = 500_000;
+
 export class OAuthProviderService {
   public constructor(private readonly config: AppConfig) {}
+
+  private profileConfigured(profile: OAuthProviderProfileConfig): boolean {
+    return Boolean(profile.clientId && profile.authorizationUrl && profile.tokenUrl);
+  }
+
+  private profilesFor(providerId: ProviderId): OAuthProviderProfileConfig[] {
+    if (providerId === "codex") {
+      return [
+        {
+          id: "oauth",
+          label: this.config.oauthProviderName,
+          authorizationUrl: this.config.oauthAuthorizationUrl,
+          tokenUrl: this.config.oauthTokenUrl,
+          userInfoUrl: this.config.oauthUserInfoUrl,
+          clientId: this.config.oauthClientId,
+          clientSecret: this.config.oauthClientSecret,
+          scopes: this.config.oauthScopes,
+          originator: this.config.oauthOriginator,
+          extraParams: {
+            codex_cli_simplified_flow: "true",
+            id_token_add_organizations: "true",
+          },
+        },
+      ];
+    }
+
+    return this.config.oauthProfiles[providerId] ?? [];
+  }
+
+  private resolveProfile(providerId: ProviderId, profileId: string): OAuthProviderProfileConfig {
+    const profiles = this.profilesFor(providerId);
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      throw new HttpError(404, "oauth_profile_not_found", `OAuth profile not found: ${providerId}/${profileId}`);
+    }
+
+    return profile;
+  }
 
   public redirectUri(): string {
     return this.config.oauthRedirectUri;
   }
 
   public isConfigured(): boolean {
-    return Boolean(
-      this.config.oauthClientId &&
-        this.config.oauthAuthorizationUrl &&
-        this.config.oauthTokenUrl,
-    );
+    const codexProfile = this.profilesFor("codex").find((profile) => profile.id === "oauth");
+    return codexProfile ? this.profileConfigured(codexProfile) : false;
+  }
+
+  public oauthProfiles(providerId: ProviderId): OAuthProfileMetadata[] {
+    return this.profilesFor(providerId).map((profile) => ({
+      id: profile.id,
+      label: profile.label,
+      configured: this.profileConfigured(profile),
+    }));
+  }
+
+  public isOAuthProfileConfigured(providerId: ProviderId, profileId: string): boolean {
+    const profile = this.resolveProfile(providerId, profileId);
+    return this.profileConfigured(profile);
+  }
+
+  public assertOAuthProfileConfigured(providerId: ProviderId, profileId: string): void {
+    const profile = this.resolveProfile(providerId, profileId);
+    if (!this.profileConfigured(profile)) {
+      throw new HttpError(
+        503,
+        "oauth_not_configured",
+        `OAuth profile is not configured for ${providerId}/${profileId}.`,
+      );
+    }
   }
 
   public publicMetadata(): {
@@ -408,22 +565,36 @@ export class OAuthProviderService {
   }
 
   public authorizationUrl(input: AuthorizationParamsInput): string {
-    this.assertConfigured();
+    return this.authorizationUrlFor("codex", "oauth", input);
+  }
+
+  public authorizationUrlFor(
+    providerId: ProviderId,
+    profileId: string,
+    input: AuthorizationParamsInput,
+  ): string {
+    const profile = this.resolveProfile(providerId, profileId);
+    this.assertOAuthProfileConfigured(providerId, profileId);
 
     const params = new URLSearchParams({
       response_type: "code",
-      client_id: this.config.oauthClientId,
+      client_id: profile.clientId,
       redirect_uri: input.redirectUri,
-      scope: this.config.oauthScopes.join(" "),
+      scope: profile.scopes.join(" "),
       state: input.state,
       code_challenge: input.codeChallenge,
       code_challenge_method: "S256",
-      codex_cli_simplified_flow: "true",
-      id_token_add_organizations: "true",
-      originator: this.config.oauthOriginator,
     });
 
-    const url = new URL(ensureHttpsUrl(this.config.oauthAuthorizationUrl));
+    if (profile.originator) {
+      params.set("originator", profile.originator);
+    }
+
+    for (const [key, value] of Object.entries(profile.extraParams)) {
+      params.set(key, value);
+    }
+
+    const url = new URL(ensureHttpsUrl(profile.authorizationUrl));
     for (const [key, value] of params.entries()) {
       url.searchParams.set(key, value);
     }
@@ -432,6 +603,101 @@ export class OAuthProviderService {
   }
 
   public async exchangeCode(input: {
+    code: string;
+    state?: string;
+    redirectUri: string;
+    codeVerifier: string;
+  }): Promise<OAuthLinkedAccountPayload> {
+    return this.exchangeCodeFor("codex", "oauth", input);
+  }
+
+  public async exchangeCodeFor(
+    providerId: ProviderId,
+    profileId: string,
+    input: {
+      code: string;
+      state?: string;
+      redirectUri: string;
+      codeVerifier: string;
+    },
+  ): Promise<OAuthLinkedAccountPayload> {
+    if (providerId === "codex" && profileId === "oauth") {
+      return this.exchangeCodeCodex(input);
+    }
+
+    const profile = this.resolveProfile(providerId, profileId);
+    this.assertOAuthProfileConfigured(providerId, profileId);
+
+    const tokenPayload = await this.fetchAuthorizationCodeTokenForProvider(providerId, profile, input);
+    const idClaims = decodeJwtClaims(tokenPayload.idToken ?? tokenPayload.accessToken);
+    const userInfoPayload = await this.fetchUserInfoWithUrl(profile.userInfoUrl, tokenPayload.accessToken);
+    const idSource = (userInfoPayload ?? idClaims ?? tokenPayload.rawResponse) as Record<string, unknown>;
+
+    let providerAccountId =
+      pickString(idSource, ["sub", "id", "user_id", "account_id", "uid", "email"]) ??
+      `oauth_${crypto.createHash("sha256").update(tokenPayload.accessToken).digest("hex").slice(0, 16)}`;
+
+    if (
+      providerId === "gemini" &&
+      profileId === "gemini-cli" &&
+      profile.authorizationUrl.includes("accounts.google.com")
+    ) {
+      const geminiProjectId = await fetchGeminiCliProjectId(tokenPayload.accessToken);
+      if (geminiProjectId) {
+        providerAccountId = geminiProjectId;
+      }
+    }
+
+    const displayName =
+      pickString(idSource, ["name", "preferred_username", "username", "email", "login"]) ??
+      `${providerId.toUpperCase()} OAuth ${providerAccountId.slice(0, 8).toUpperCase()}`;
+
+    const usageDefaults = this.config.providerUsage[providerId];
+    const fiveHourLimit =
+      usageDefaults && usageDefaults.fiveHourLimit > 0
+        ? usageDefaults.fiveHourLimit
+        : this.config.defaultFiveHourLimit > 0
+          ? this.config.defaultFiveHourLimit
+          : FALLBACK_MANUAL_FIVE_HOUR_LIMIT;
+    const weeklyLimit =
+      usageDefaults && usageDefaults.weeklyLimit > 0
+        ? usageDefaults.weeklyLimit
+        : this.config.defaultWeeklyLimit > 0
+          ? this.config.defaultWeeklyLimit
+          : FALLBACK_MANUAL_WEEKLY_LIMIT;
+    const nowIso = new Date().toISOString();
+
+    return {
+      provider: providerId,
+      oauthProfileId: profileId,
+      providerAccountId,
+      chatgptAccountId: null,
+      displayName,
+      accessToken: tokenPayload.accessToken,
+      refreshToken: tokenPayload.refreshToken,
+      tokenExpiresAt: tokenPayload.tokenExpiresAt,
+      quotaSyncedAt: nowIso,
+      quotaSyncStatus: fiveHourLimit > 0 && weeklyLimit > 0 ? "stale" : "unavailable",
+      quotaSyncError:
+        "OAuth linked. Configure provider usage endpoints/credentials for live quota sync.",
+      planType: null,
+      creditsBalance: null,
+      quota: {
+        fiveHourLimit,
+        fiveHourUsed: 0,
+        fiveHourMode: "units",
+        fiveHourWindowStartedAt: nowIso,
+        fiveHourResetsAt: null,
+        weeklyLimit,
+        weeklyUsed: 0,
+        weeklyMode: "units",
+        weeklyWindowStartedAt: nowIso,
+        weeklyResetsAt: null,
+      },
+    };
+  }
+
+  private async exchangeCodeCodex(input: {
     code: string;
     redirectUri: string;
     codeVerifier: string;
@@ -527,6 +793,7 @@ export class OAuthProviderService {
 
     return {
       provider: "codex",
+      oauthProfileId: "oauth",
       providerAccountId,
       chatgptAccountId,
       displayName,
@@ -575,7 +842,37 @@ export class OAuthProviderService {
       return null;
     }
 
+    return this.parseLiveQuotaSnapshot(payload);
+  }
+
+  private parseLiveQuotaSnapshot(payload: Record<string, unknown>): LiveQuotaSnapshot | null {
+    const windows = this.collectRateLimitWindows(payload);
+    const fiveHourWindow = pickWindow(windows, 300, 120);
+    const remainingAfterFiveHour = windows.filter((window) => window !== fiveHourWindow);
+    const weeklyWindow = pickWindow(remainingAfterFiveHour, 10_080, 3_000);
+
+    if (!fiveHourWindow || !weeklyWindow) {
+      return null;
+    }
+
+    const root = asRecord(payload.result) ?? payload;
+    const credits = asRecord(payload.credits ?? root.credits);
+    const creditsBalance = credits ? asString(credits.balance) ?? null : null;
+    const planType = asString(payload.plan_type ?? root.plan_type ?? root.planType) ?? null;
+    const syncedAt = new Date().toISOString();
+
+    return {
+      fiveHour: toLiveQuotaWindow(fiveHourWindow),
+      weekly: toLiveQuotaWindow(weeklyWindow),
+      planType,
+      creditsBalance,
+      syncedAt,
+    };
+  }
+
+  private collectRateLimitWindows(payload: Record<string, unknown>): RateLimitWindowCandidate[] {
     const windows: RateLimitWindowCandidate[] = [];
+
     const mainRateLimit = asRecord(payload.rate_limit);
     if (mainRateLimit) {
       const primary = asRecord(mainRateLimit.primary_window);
@@ -624,32 +921,171 @@ export class OAuthProviderService {
       }
     }
 
-    const fiveHourWindow = pickWindow(windows, 300, 120);
-    const remainingAfterFiveHour = windows.filter((window) => window !== fiveHourWindow);
-    const weeklyWindow = pickWindow(remainingAfterFiveHour, 10_080, 3_000);
+    const root = asRecord(payload.result) ?? payload;
+    const codexRateLimits = asRecord(root.rateLimits ?? root.rate_limits);
+    if (codexRateLimits) {
+      const primary = asRecord(codexRateLimits.primary ?? codexRateLimits.primary_window);
+      const secondary = asRecord(codexRateLimits.secondary ?? codexRateLimits.secondary_window);
 
-    if (!fiveHourWindow || !weeklyWindow) {
+      if (primary) {
+        const parsed = parseRateLimitWindowCandidate(primary);
+        if (parsed) {
+          windows.push(parsed);
+        }
+      }
+
+      if (secondary) {
+        const parsed = parseRateLimitWindowCandidate(secondary);
+        if (parsed) {
+          windows.push(parsed);
+        }
+      }
+    }
+
+    return windows;
+  }
+
+  private async fetchCodexRateLimitsViaAppServer(): Promise<Record<string, unknown> | null> {
+    if (!this.config.codexAppServerEnabled) {
       return null;
     }
 
-    const credits = asRecord(payload.credits);
-    const creditsBalance = credits ? asString(credits.balance) ?? null : null;
-    const planType = asString(payload.plan_type) ?? null;
-    const syncedAt = new Date().toISOString();
+    const command = this.config.codexAppServerCommand.trim();
+    if (!command) {
+      return null;
+    }
 
-    return {
-      fiveHour: toLiveQuotaWindow(fiveHourWindow),
-      weekly: toLiveQuotaWindow(weeklyWindow),
-      planType,
-      creditsBalance,
-      syncedAt,
-    };
+    const timeoutMs = Math.max(500, this.config.codexAppServerTimeoutMs);
+
+    return await new Promise<Record<string, unknown> | null>((resolve) => {
+      let settled = false;
+      const finish = (value: Record<string, unknown> | null): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeoutId);
+
+        if (child.stdout) {
+          child.stdout.off("data", handleStdout);
+        }
+
+        if (child.stdin && !child.stdin.destroyed) {
+          child.stdin.destroy();
+        }
+
+        if (!child.killed) {
+          child.kill();
+        }
+
+        resolve(value);
+      };
+
+      let stdoutBuffer = "";
+      const handleStdout = (chunk: Buffer | string): void => {
+        const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        stdoutBuffer += text;
+
+        let newlineIndex = stdoutBuffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const rawLine = stdoutBuffer.slice(0, newlineIndex).trim();
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+
+          if (rawLine.length > 0) {
+            try {
+              const parsed = JSON.parse(rawLine) as unknown;
+              const record = asRecord(parsed);
+              if (record) {
+                const extracted = extractCodexRateLimitPayload(record);
+                if (extracted) {
+                  finish(extracted);
+                  return;
+                }
+              }
+            } catch {
+              continue;
+            }
+          }
+
+          newlineIndex = stdoutBuffer.indexOf("\n");
+        }
+      };
+
+      const child = spawn(command, this.config.codexAppServerArgs, {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      const timeoutId = setTimeout(() => {
+        finish(null);
+      }, timeoutMs);
+
+      child.once("error", (error) => {
+        if (errnoCode(error) === "ENOENT") {
+          finish(null);
+          return;
+        }
+
+        finish(null);
+      });
+
+      child.once("close", () => {
+        if (settled) {
+          return;
+        }
+
+        const remaining = stdoutBuffer.trim();
+        if (remaining.length > 0) {
+          try {
+            const parsed = JSON.parse(remaining) as unknown;
+            const record = asRecord(parsed);
+            if (record) {
+              finish(extractCodexRateLimitPayload(record));
+              return;
+            }
+          } catch {
+            finish(null);
+            return;
+          }
+        }
+
+        finish(null);
+      });
+
+      if (child.stdout) {
+        child.stdout.on("data", handleStdout);
+      }
+
+      if (!child.stdin) {
+        finish(null);
+        return;
+      }
+
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        id: "omni-connector-rate-limits",
+        method: "account/rateLimits/read",
+      });
+
+      child.stdin.write(`${payload}\n`, "utf8", () => {
+        if (child.stdin && !child.stdin.destroyed) {
+          child.stdin.end();
+        }
+      });
+    });
   }
 
   private async fetchUsagePayload(
     accessToken: string,
     chatgptAccountId?: string | null,
   ): Promise<Record<string, unknown> | null> {
+    if (!this.config.oauthQuotaUrl) {
+      const appServerPayload = await this.fetchCodexRateLimitsViaAppServer();
+      if (appServerPayload) {
+        return appServerPayload;
+      }
+    }
+
     const candidateUrls = [
       "https://chatgpt.com/backend-api/wham/usage",
       "https://chatgpt.com/backend-api/codex/wham/usage",
@@ -680,6 +1116,14 @@ export class OAuthProviderService {
         });
 
         if (!response.ok) {
+          if (response.status === 429) {
+            const rateLimitBody = await response.text().catch(() => "");
+            const retryAfterSeconds = parseRetryAfterSecondsFromRateLimitError(rateLimitBody);
+            if (retryAfterSeconds !== null) {
+              return buildRateLimitPayloadFromRetryAfter(retryAfterSeconds);
+            }
+          }
+
           lastError = `status ${response.status}`;
           continue;
         }
@@ -724,6 +1168,48 @@ export class OAuthProviderService {
     return this.postTokenRequest(form);
   }
 
+  private async fetchAuthorizationCodeTokenForProfile(
+    profile: OAuthProviderProfileConfig,
+    input: {
+      code: string;
+      state?: string;
+      redirectUri: string;
+      codeVerifier: string;
+    },
+  ): Promise<TokenPayload> {
+    const form = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: input.code,
+      redirect_uri: input.redirectUri,
+      client_id: profile.clientId,
+      code_verifier: input.codeVerifier,
+    });
+
+    if (profile.clientSecret) {
+      form.set("client_secret", profile.clientSecret);
+    }
+
+    return this.postTokenRequestWithUrl(profile.tokenUrl, form);
+  }
+
+  private async fetchAuthorizationCodeTokenForProvider(
+    providerId: ProviderId,
+    profile: OAuthProviderProfileConfig,
+    input: {
+      code: string;
+      state?: string;
+      redirectUri: string;
+      codeVerifier: string;
+    },
+  ): Promise<TokenPayload> {
+    if (providerId === "claude") {
+      const payload = buildClaudeAuthorizationCodeTokenPayload(profile, input);
+      return this.postJsonTokenRequestWithUrl(profile.tokenUrl, payload);
+    }
+
+    return this.fetchAuthorizationCodeTokenForProfile(profile, input);
+  }
+
   private async fetchRefreshToken(refreshToken: string): Promise<TokenPayload> {
     const form = new URLSearchParams({
       grant_type: "refresh_token",
@@ -740,37 +1226,34 @@ export class OAuthProviderService {
 
   private async postTokenRequest(form: URLSearchParams): Promise<TokenPayload> {
     const tokenUrl = ensureHttpsUrl(this.config.oauthTokenUrl);
+    return this.postTokenRequestWithUrl(tokenUrl, form);
+  }
 
-    let response: Response;
-    try {
-      response = await fetch(tokenUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: form,
-        signal: AbortSignal.timeout(12_000),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "OAuth token request failed.";
-      throw new HttpError(502, "oauth_token_request_failed", message);
-    }
+  private async parseTokenResponse(response: Response): Promise<TokenPayload> {
+    const rawBody = await response.text();
+    let parsed: unknown = null;
 
-    let parsed: unknown;
-    try {
-      parsed = await response.json();
-    } catch {
-      throw new HttpError(502, "oauth_token_parse_error", "OAuth token endpoint returned non-JSON response.");
+    if (rawBody.trim().length > 0) {
+      try {
+        parsed = JSON.parse(rawBody) as unknown;
+      } catch {
+        parsed = null;
+      }
     }
 
     const record = asRecord(parsed);
     if (!response.ok || !record) {
-      throw new HttpError(
-        502,
-        "oauth_token_exchange_failed",
-        `OAuth token exchange failed with status ${response.status}.`,
-      );
+      if (!response.ok) {
+        const baseMessage = `OAuth token exchange failed with status ${response.status}.`;
+        const details = record ? oauthErrorSummary(record) : "OAuth token endpoint returned non-JSON response.";
+        throw new HttpError(
+          502,
+          "oauth_token_exchange_failed",
+          details ? `${baseMessage} ${details}` : baseMessage,
+        );
+      }
+
+      throw new HttpError(502, "oauth_token_parse_error", "OAuth token endpoint returned non-JSON response.");
     }
 
     const accessToken = pickString(record, ["access_token"]);
@@ -787,14 +1270,68 @@ export class OAuthProviderService {
     };
   }
 
+  private async postTokenRequestWithUrl(tokenUrl: string, form: URLSearchParams): Promise<TokenPayload> {
+    const safeTokenUrl = ensureHttpsUrl(tokenUrl);
+
+    let response: Response;
+    try {
+      response = await fetch(safeTokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: form,
+        signal: AbortSignal.timeout(12_000),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "OAuth token request failed.";
+      throw new HttpError(502, "oauth_token_request_failed", message);
+    }
+
+    return this.parseTokenResponse(response);
+  }
+
+  private async postJsonTokenRequestWithUrl(
+    tokenUrl: string,
+    payload: Record<string, string>,
+  ): Promise<TokenPayload> {
+    const safeTokenUrl = ensureHttpsUrl(tokenUrl);
+
+    let response: Response;
+    try {
+      response = await fetch(safeTokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(12_000),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "OAuth token request failed.";
+      throw new HttpError(502, "oauth_token_request_failed", message);
+    }
+
+    return this.parseTokenResponse(response);
+  }
+
   private async fetchUserInfo(accessToken: string): Promise<Record<string, unknown> | null> {
-    if (!this.config.oauthUserInfoUrl) {
+    return this.fetchUserInfoWithUrl(this.config.oauthUserInfoUrl, accessToken);
+  }
+
+  private async fetchUserInfoWithUrl(
+    userInfoUrl: string | null,
+    accessToken: string,
+  ): Promise<Record<string, unknown> | null> {
+    if (!userInfoUrl) {
       return null;
     }
 
     let response: Response;
     try {
-      response = await fetch(ensureHttpsUrl(this.config.oauthUserInfoUrl), {
+      response = await fetch(ensureHttpsUrl(userInfoUrl), {
         method: "GET",
         headers: {
           Authorization: `Bearer ${accessToken}`,

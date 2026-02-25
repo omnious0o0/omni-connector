@@ -6,6 +6,20 @@ import { PersistedData } from "./types";
 const SECRET_PREFIX = "enc:v1:";
 const SECRET_KEY_BYTES = 32;
 
+function errnoCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return null;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function shouldIgnoreChmodError(error: unknown): boolean {
+  const code = errnoCode(error);
+  return code === "EPERM" || code === "ENOSYS" || code === "EINVAL";
+}
+
 export function createConnectorApiKey(): string {
   return `cxk_${crypto.randomBytes(24).toString("hex")}`;
 }
@@ -100,7 +114,14 @@ export class DataStore {
       return this.recoverFromCorruptStore();
     }
 
-    const { value, migrated } = this.decryptPersistedData(parsed);
+    let decrypted: { value: PersistedData; migrated: boolean };
+    try {
+      decrypted = this.decryptPersistedData(parsed);
+    } catch {
+      return this.recoverFromCorruptStore();
+    }
+
+    const { value, migrated } = decrypted;
     if (migrated) {
       this.state = value;
       this.persist();
@@ -147,7 +168,11 @@ export class DataStore {
 
     try {
       fs.renameSync(this.filePath, backupPath);
-    } catch {}
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
 
     this.state = initialData;
     this.persist();
@@ -187,7 +212,11 @@ export class DataStore {
 
     try {
       fs.chmodSync(this.keyPath, 0o600);
-    } catch {}
+    } catch (error) {
+      if (!shouldIgnoreChmodError(error)) {
+        throw error;
+      }
+    }
 
     return generated;
   }
@@ -270,6 +299,10 @@ export class DataStore {
 
     try {
       fs.chmodSync(this.filePath, 0o600);
-    } catch {}
+    } catch (error) {
+      if (!shouldIgnoreChmodError(error)) {
+        throw error;
+      }
+    }
   }
 }

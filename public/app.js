@@ -30,7 +30,19 @@ const routeSubmitButton = document.querySelector("#route-test-form button[type='
 const rotateKeyButton = document.querySelector("#rotate-key");
 const copyKeyButton = document.querySelector("#copy-key");
 const keyVisibilityButton = document.querySelector("#toggle-key-visibility");
-const oauthConnectLink = document.querySelector("#oauth-connect-link");
+const connectTriggerButton = document.querySelector("#connect-trigger");
+const connectModalElement = document.querySelector("#connect-modal");
+const connectProviderListElement = document.querySelector("#connect-provider-list");
+const connectModalCloseButton = document.querySelector("#connect-modal-close");
+const apiLinkForm = document.querySelector("#api-link-form");
+const apiLinkTitleElement = document.querySelector("#api-link-title");
+const apiLinkProviderElement = document.querySelector("#api-link-provider");
+const apiLinkDisplayNameInput = document.querySelector("#api-link-display-name");
+const apiLinkProviderAccountIdInput = document.querySelector("#api-link-provider-account-id");
+const apiLinkKeyInput = document.querySelector("#api-link-key");
+const apiLinkManualFiveHourInput = document.querySelector("#api-link-manual-5h");
+const apiLinkManualWeeklyInput = document.querySelector("#api-link-manual-7d");
+const apiLinkCancelButton = document.querySelector("#api-link-cancel");
 
 let dashboard = null;
 let toastTimer = null;
@@ -58,6 +70,10 @@ let providerConfigured = null;
 let dashboardLoaded = false;
 let dashboardHasSyncIssues = false;
 let statusError = false;
+let connectProviders = [];
+let selectedApiProviderId = null;
+let connectModalPreviousFocus = null;
+let strictLiveQuotaEnabled = false;
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -202,8 +218,8 @@ function migrateLegacyUiSettings() {
       window.localStorage.setItem(nextStorageKey, legacyValue);
       window.localStorage.removeItem(legacyStorageKey);
     }
-  } catch (error) {
-    console.warn("Unable to migrate legacy UI settings.", error);
+  } catch {
+    return;
   }
 }
 
@@ -966,28 +982,309 @@ async function loadDashboard() {
   }
 }
 
-function renderOAuthProvider(metadata) {
-  providerConfigured = Boolean(metadata.configured);
-  statusError = false;
-
-  if (oauthConnectLink) {
-    oauthConnectLink.textContent = "";
-    const icon = document.createElement("i");
-    icon.setAttribute("data-lucide", "plus");
-    oauthConnectLink.append(icon, ` Connect ${metadata.providerName}`);
-    oauthConnectLink.classList.remove("btn-disabled");
-    oauthConnectLink.setAttribute("href", "/auth/omni/start");
-    oauthConnectLink.removeAttribute("aria-disabled");
-    reRenderIcons();
+function findConnectProvider(providerId) {
+  if (typeof providerId !== "string") {
+    return null;
   }
 
+  return connectProviders.find((provider) => provider.id === providerId) ?? null;
+}
+
+function findConnectOAuthOption(provider, optionId) {
+  if (!provider || typeof optionId !== "string") {
+    return null;
+  }
+
+  if (!Array.isArray(provider.oauthOptions)) {
+    return null;
+  }
+
+  return provider.oauthOptions.find((option) => option.id === optionId) ?? null;
+}
+
+function renderConnectProviderCards() {
+  if (!(connectProviderListElement instanceof HTMLElement)) {
+    return;
+  }
+
+  if (connectProviders.length === 0) {
+    connectProviderListElement.innerHTML = `
+      <div class="connect-provider-empty">
+        <i data-lucide="plug-zap"></i>
+        <p>Provider list unavailable.</p>
+      </div>
+    `;
+    reRenderIcons();
+    return;
+  }
+
+  const cards = connectProviders
+    .map((provider) => {
+      const oauthOptions = Array.isArray(provider.oauthOptions) ? provider.oauthOptions : [];
+      const warnings = Array.isArray(provider.warnings)
+        ? provider.warnings.filter((warning) => typeof warning === "string" && warning.trim().length > 0)
+        : [];
+      const oauthButtons = oauthOptions
+        .map((option) => {
+          const disabled = option.configured !== true;
+          return `<button class="btn btn-outline" type="button" data-connect-oauth-provider="${escapeHtml(provider.id)}" data-connect-oauth-option="${escapeHtml(option.id)}" ${disabled ? "disabled" : ""}>${escapeHtml(option.label)}</button>`;
+        })
+        .join("");
+      const apiButton = provider.supportsApiKey
+        ? `<button class="btn btn-secondary" type="button" data-connect-api="${escapeHtml(provider.id)}">API Key</button>`
+        : "";
+      const note =
+        provider.supportsOAuth && !provider.oauthConfigured
+          ? '<p class="connect-provider-note">OAuth not configured for this provider.</p>'
+          : strictLiveQuotaEnabled && !provider.usageConfigured
+            ? '<p class="connect-provider-note">Strict live quota mode: usage adapter not configured.</p>'
+            : "";
+      const recommendationTag = provider.recommended
+        ? '<span class="connect-provider-recommended">recommended</span>'
+        : "";
+      const warningBlock = warnings.length > 0
+        ? `<div class="connect-provider-warning" role="alert">${warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join("")}</div>`
+        : "";
+
+      return `
+        <article class="connect-provider-card">
+          <header class="connect-provider-head">
+            <h4>${escapeHtml(provider.name)}</h4>
+            <div class="connect-provider-head-tags">
+              <span class="connect-provider-tag">${escapeHtml(provider.id)}</span>
+              ${recommendationTag}
+            </div>
+          </header>
+          <div class="connect-provider-actions">
+            ${oauthButtons}
+            ${apiButton}
+          </div>
+          ${warningBlock}
+          ${note}
+        </article>
+      `;
+    })
+    .join("");
+
+  connectProviderListElement.innerHTML = cards;
+}
+
+function hideApiLinkForm() {
+  selectedApiProviderId = null;
+
+  if (connectProviderListElement instanceof HTMLElement) {
+    connectProviderListElement.hidden = false;
+  }
+
+  if (apiLinkForm instanceof HTMLFormElement) {
+    apiLinkForm.hidden = true;
+    apiLinkForm.reset();
+  }
+}
+
+function isConnectModalOpen() {
+  return connectModalElement instanceof HTMLElement && connectModalElement.hidden === false;
+}
+
+function getConnectModalFocusableElements() {
+  if (!isConnectModalOpen()) {
+    return [];
+  }
+
+  const selector =
+    "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  const allFocusable = connectModalElement.querySelectorAll(selector);
+
+  return [...allFocusable].filter((element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (element.hidden) {
+      return false;
+    }
+
+    if (element.getAttribute("aria-hidden") === "true") {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function focusConnectModalPrimaryElement() {
+  if (connectModalCloseButton instanceof HTMLButtonElement && !connectModalCloseButton.disabled) {
+    connectModalCloseButton.focus();
+    return;
+  }
+
+  const [first] = getConnectModalFocusableElements();
+  if (first instanceof HTMLElement) {
+    first.focus();
+  }
+}
+
+function showApiLinkForm(provider) {
+  selectedApiProviderId = provider.id;
+
+  if (connectProviderListElement instanceof HTMLElement) {
+    connectProviderListElement.hidden = true;
+  }
+
+  if (apiLinkTitleElement instanceof HTMLElement) {
+    apiLinkTitleElement.textContent = "Link API key";
+  }
+
+  if (apiLinkProviderElement instanceof HTMLElement) {
+    apiLinkProviderElement.textContent = provider.name;
+  }
+
+  if (apiLinkDisplayNameInput instanceof HTMLInputElement) {
+    apiLinkDisplayNameInput.value = provider.name;
+  }
+
+  if (apiLinkProviderAccountIdInput instanceof HTMLInputElement) {
+    apiLinkProviderAccountIdInput.value = "";
+  }
+
+  if (apiLinkKeyInput instanceof HTMLInputElement) {
+    apiLinkKeyInput.value = "";
+  }
+
+  if (apiLinkManualFiveHourInput instanceof HTMLInputElement) {
+    apiLinkManualFiveHourInput.value = "";
+  }
+
+  if (apiLinkManualWeeklyInput instanceof HTMLInputElement) {
+    apiLinkManualWeeklyInput.value = "";
+  }
+
+  if (apiLinkForm instanceof HTMLFormElement) {
+    apiLinkForm.hidden = false;
+  }
+
+  if (apiLinkKeyInput instanceof HTMLInputElement) {
+    apiLinkKeyInput.focus();
+  }
+}
+
+function openConnectModal() {
+  if (!(connectModalElement instanceof HTMLElement)) {
+    return;
+  }
+
+  connectModalPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  hideApiLinkForm();
+  renderConnectProviderCards();
+  connectModalElement.hidden = false;
+  focusConnectModalPrimaryElement();
+}
+
+function closeConnectModal() {
+  if (!(connectModalElement instanceof HTMLElement)) {
+    return;
+  }
+
+  hideApiLinkForm();
+  connectModalElement.hidden = true;
+
+  if (connectModalPreviousFocus instanceof HTMLElement) {
+    connectModalPreviousFocus.focus();
+  }
+  connectModalPreviousFocus = null;
+}
+
+function renderConnectProviders(payload) {
+  const providers = Array.isArray(payload?.providers) ? payload.providers : [];
+  strictLiveQuotaEnabled = payload?.strictLiveQuota === true;
+
+  connectProviders = providers
+    .map((provider) => {
+      if (!provider || typeof provider !== "object") {
+        return null;
+      }
+
+      const id = typeof provider.id === "string" ? provider.id : "";
+      const name = typeof provider.name === "string" ? provider.name : id;
+      const supportsOAuth = provider.supportsOAuth === true;
+      const oauthConfigured = provider.oauthConfigured === true;
+      const oauthStartPath =
+        typeof provider.oauthStartPath === "string" ? provider.oauthStartPath : null;
+      const oauthOptions = Array.isArray(provider.oauthOptions)
+        ? provider.oauthOptions
+            .map((option) => {
+              if (!option || typeof option !== "object") {
+                return null;
+              }
+
+              const optionId = typeof option.id === "string" ? option.id : "";
+              const optionLabel = typeof option.label === "string" ? option.label : optionId;
+              const optionConfigured = option.configured === true;
+              const optionStartPath =
+                typeof option.startPath === "string" ? option.startPath : oauthStartPath;
+
+              if (!optionId || !optionLabel || !optionStartPath) {
+                return null;
+              }
+
+              return {
+                id: optionId,
+                label: optionLabel,
+                configured: optionConfigured,
+                startPath: optionStartPath,
+              };
+            })
+            .filter((option) => option !== null)
+        : [];
+      const supportsApiKey = provider.supportsApiKey === true;
+      const usageConfigured = provider.usageConfigured === true;
+      const recommended = provider.recommended === true;
+      const warnings = Array.isArray(provider.warnings)
+        ? provider.warnings
+            .filter((warning) => typeof warning === "string")
+            .map((warning) => warning.trim())
+            .filter((warning) => warning.length > 0)
+        : [];
+
+      if (!id || !name) {
+        return null;
+      }
+
+      return {
+        id,
+        name,
+        supportsOAuth,
+        oauthConfigured,
+        oauthStartPath,
+        oauthOptions,
+        supportsApiKey,
+        usageConfigured,
+        recommended,
+        warnings,
+      };
+    })
+    .filter((provider) => provider !== null);
+
+  providerConfigured =
+    connectProviders.length > 0 &&
+    connectProviders.some(
+      (provider) => provider.supportsApiKey || (provider.supportsOAuth && provider.oauthConfigured),
+    );
+  statusError = false;
+
+  if (connectTriggerButton instanceof HTMLButtonElement) {
+    connectTriggerButton.disabled = connectProviders.length === 0;
+    connectTriggerButton.setAttribute("aria-disabled", connectProviders.length === 0 ? "true" : "false");
+  }
+
+  renderConnectProviderCards();
   refreshTopbarStatus();
 }
 
-async function loadOAuthProvider() {
+async function loadConnectProviders() {
   try {
-    const metadata = await request("/api/auth/provider");
-    renderOAuthProvider(metadata);
+    const metadata = await request("/api/auth/providers");
+    renderConnectProviders(metadata);
   } catch (error) {
     statusError = true;
     refreshTopbarStatus();
@@ -1178,6 +1475,49 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (targetElement.closest("#connect-trigger")) {
+    openConnectModal();
+    return;
+  }
+
+  if (targetElement.closest("#connect-modal-close") || targetElement.closest("[data-close-connect-modal]")) {
+    closeConnectModal();
+    return;
+  }
+
+  const oauthProviderButton = targetElement.closest("[data-connect-oauth-provider][data-connect-oauth-option]");
+  if (oauthProviderButton instanceof HTMLElement) {
+    const providerId = oauthProviderButton.dataset.connectOauthProvider;
+    const oauthOptionId = oauthProviderButton.dataset.connectOauthOption;
+    const provider = findConnectProvider(providerId);
+    const oauthOption = findConnectOAuthOption(provider, oauthOptionId);
+    if (!provider || !oauthOption || oauthOption.configured !== true) {
+      showToast("OAuth is not available for this provider.", true);
+      return;
+    }
+
+    window.location.assign(oauthOption.startPath);
+    return;
+  }
+
+  const apiProviderButton = targetElement.closest("[data-connect-api]");
+  if (apiProviderButton instanceof HTMLElement) {
+    const providerId = apiProviderButton.dataset.connectApi;
+    const provider = findConnectProvider(providerId);
+    if (!provider || !provider.supportsApiKey) {
+      showToast("API key link is not available for this provider.", true);
+      return;
+    }
+
+    showApiLinkForm(provider);
+    return;
+  }
+
+  if (targetElement.closest("#api-link-cancel")) {
+    hideApiLinkForm();
+    return;
+  }
+
   if (targetElement.closest("#toggle-sidebar")) {
     if (isMobileViewport()) {
       showToast("Side panel collapse is desktop only.");
@@ -1289,6 +1629,58 @@ if (routeForm instanceof HTMLFormElement) {
       await routeTest(units);
     } catch (error) {
       showToast(error.message || "Route test failed.", true);
+    }
+  });
+}
+
+if (apiLinkForm instanceof HTMLFormElement) {
+  apiLinkForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (!selectedApiProviderId) {
+      showToast("Select a provider first.", true);
+      return;
+    }
+
+    const provider = findConnectProvider(selectedApiProviderId);
+    if (!provider) {
+      showToast("Selected provider is unavailable.", true);
+      return;
+    }
+
+    const data = new FormData(apiLinkForm);
+    const displayName = String(data.get("displayName") ?? "");
+    const providerAccountId = String(data.get("providerAccountId") ?? "");
+    const apiKey = String(data.get("apiKey") ?? "");
+    const manualFiveHourLimitValue = Number(data.get("manualFiveHourLimit") ?? "");
+    const manualWeeklyLimitValue = Number(data.get("manualWeeklyLimit") ?? "");
+    const manualFiveHourLimit =
+      Number.isFinite(manualFiveHourLimitValue) && manualFiveHourLimitValue > 0
+        ? Math.round(manualFiveHourLimitValue)
+        : undefined;
+    const manualWeeklyLimit =
+      Number.isFinite(manualWeeklyLimitValue) && manualWeeklyLimitValue > 0
+        ? Math.round(manualWeeklyLimitValue)
+        : undefined;
+
+    try {
+      await request("/api/accounts/link-api", {
+        method: "POST",
+        body: {
+          provider: selectedApiProviderId,
+          displayName,
+          providerAccountId,
+          apiKey,
+          manualFiveHourLimit,
+          manualWeeklyLimit,
+        },
+      });
+
+      showToast(`${provider.name} linked via API key.`);
+      closeConnectModal();
+      await loadDashboard();
+    } catch (error) {
+      showToast(error.message || "Failed to link API key.", true);
     }
   });
 }
@@ -1421,7 +1813,52 @@ for (const tab of sideTabs) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && currentView === "settings") {
+  if (isConnectModalOpen() && event.key === "Tab") {
+    const focusableElements = getConnectModalFocusableElements();
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    const currentIndex = focusableElements.indexOf(activeElement);
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey) {
+      if (currentIndex <= 0) {
+        event.preventDefault();
+        if (lastElement instanceof HTMLElement) {
+          lastElement.focus();
+        }
+      }
+      return;
+    }
+
+    if (currentIndex === -1 || currentIndex === focusableElements.length - 1) {
+      event.preventDefault();
+      if (firstElement instanceof HTMLElement) {
+        firstElement.focus();
+      }
+    }
+    return;
+  }
+
+  if (event.key !== "Escape") {
+    return;
+  }
+
+  if (isConnectModalOpen()) {
+    if (apiLinkForm instanceof HTMLFormElement && apiLinkForm.hidden === false) {
+      hideApiLinkForm();
+      return;
+    }
+
+    closeConnectModal();
+    return;
+  }
+
+  if (currentView === "settings") {
     setActiveView("overview");
   }
 });
@@ -1440,7 +1877,7 @@ window.addEventListener("load", async () => {
   setConnectorControlsEnabled(false);
   checkConnectionToast();
   try {
-    await Promise.all([loadOAuthProvider(), loadDashboard()]);
+    await Promise.all([loadConnectProviders(), loadDashboard()]);
   } catch (error) {
     showToast(error.message || "Failed to load.", true);
   }
