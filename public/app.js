@@ -93,6 +93,8 @@ let connectModalPreviousFocus = null;
 let accountSettingsPreviousFocus = null;
 let selectedAccountSettingsId = null;
 let strictLiveQuotaEnabled = false;
+let connectWarningTooltipElement = null;
+let activeWarningTrigger = null;
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -129,6 +131,133 @@ if (window.lucide) {
 function reRenderIcons() {
   if (window.lucide) {
     lucide.createIcons();
+  }
+}
+
+function warningItemsFromTrigger(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return [];
+  }
+
+  const raw = trigger.dataset.warningItems;
+  if (typeof raw !== "string" || raw.length === 0) {
+    return [];
+  }
+
+  return raw
+    .split("|")
+    .map((item) => {
+      try {
+        return decodeURIComponent(item).trim();
+      } catch {
+        return "";
+      }
+    })
+    .filter((item) => item.length > 0);
+}
+
+function ensureConnectWarningTooltipElement() {
+  if (connectWarningTooltipElement instanceof HTMLElement) {
+    return connectWarningTooltipElement;
+  }
+
+  const element = document.createElement("div");
+  element.className = "connect-provider-warning-floating";
+  element.hidden = true;
+  element.setAttribute("role", "tooltip");
+  document.body.append(element);
+  connectWarningTooltipElement = element;
+  return element;
+}
+
+function positionConnectWarningTooltip(trigger, tooltip) {
+  const triggerRect = trigger.getBoundingClientRect();
+  const spacing = 8;
+  const viewportPadding = 12;
+  const maxWidth = Math.max(220, Math.min(360, window.innerWidth - viewportPadding * 2));
+
+  tooltip.style.maxWidth = `${maxWidth}px`;
+  tooltip.style.left = `${viewportPadding}px`;
+  tooltip.style.top = `${viewportPadding}px`;
+
+  const tooltipRect = tooltip.getBoundingClientRect();
+
+  let left = triggerRect.left;
+  if (left + tooltipRect.width > window.innerWidth - viewportPadding) {
+    left = window.innerWidth - viewportPadding - tooltipRect.width;
+  }
+  if (left < viewportPadding) {
+    left = viewportPadding;
+  }
+
+  let top = triggerRect.bottom + spacing;
+  if (top + tooltipRect.height > window.innerHeight - viewportPadding) {
+    top = triggerRect.top - tooltipRect.height - spacing;
+  }
+  if (top < viewportPadding) {
+    top = viewportPadding;
+  }
+
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+function hideConnectWarningTooltip() {
+  if (!(connectWarningTooltipElement instanceof HTMLElement)) {
+    activeWarningTrigger = null;
+    return;
+  }
+
+  connectWarningTooltipElement.hidden = true;
+  connectWarningTooltipElement.innerHTML = "";
+  activeWarningTrigger = null;
+}
+
+function showConnectWarningTooltip(trigger) {
+  const items = warningItemsFromTrigger(trigger);
+  if (items.length === 0) {
+    hideConnectWarningTooltip();
+    return;
+  }
+
+  const tooltip = ensureConnectWarningTooltipElement();
+  tooltip.innerHTML = `
+    <p class="connect-provider-warning-title">Warnings</p>
+    <ul>
+      ${items.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+    </ul>
+  `;
+  tooltip.hidden = false;
+  positionConnectWarningTooltip(trigger, tooltip);
+  activeWarningTrigger = trigger;
+}
+
+function bindConnectWarningTriggers() {
+  if (!(connectProviderListElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const triggers = connectProviderListElement.querySelectorAll(".connect-provider-warning-trigger");
+  for (const trigger of triggers) {
+    if (!(trigger instanceof HTMLElement)) {
+      continue;
+    }
+
+    trigger.addEventListener("mouseenter", () => {
+      showConnectWarningTooltip(trigger);
+    });
+
+    trigger.addEventListener("mouseleave", () => {
+      hideConnectWarningTooltip();
+    });
+
+    trigger.addEventListener("focus", () => {
+      showConnectWarningTooltip(trigger);
+    });
+
+    trigger.addEventListener("blur", () => {
+      hideConnectWarningTooltip();
+    });
   }
 }
 
@@ -1221,16 +1350,11 @@ function renderConnectProviderCards() {
               class="connect-provider-warning-trigger"
               type="button"
               aria-label="Warnings for ${escapeHtml(provider.name)}"
+              data-warning-items="${warnings.map((warning) => encodeURIComponent(warning)).join("|")}"
               title="Provider warnings"
             >
               <i data-lucide="triangle-alert"></i>
             </button>
-            <div class="connect-provider-warning-panel" role="note" aria-live="polite">
-              <p class="connect-provider-warning-title">Warnings</p>
-              <ul>
-                ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
-              </ul>
-            </div>
           </div>
         `
         : "";
@@ -1265,11 +1389,13 @@ function renderConnectProviderCards() {
 
   connectProviderListElement.innerHTML = cards;
   reRenderIcons();
+  bindConnectWarningTriggers();
 }
 
 function hideApiLinkForm() {
   selectedApiProviderId = null;
   apiLinkManualLimitsEnabled = false;
+  hideConnectWarningTooltip();
 
   if (connectProviderListElement instanceof HTMLElement) {
     connectProviderListElement.hidden = false;
@@ -1421,6 +1547,7 @@ function closeConnectModal() {
     return;
   }
 
+  hideConnectWarningTooltip();
   hideApiLinkForm();
   connectModalElement.hidden = true;
 
@@ -2311,7 +2438,21 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("resize", () => {
   applySidebarState();
+
+  if (activeWarningTrigger instanceof HTMLElement && connectWarningTooltipElement instanceof HTMLElement && !connectWarningTooltipElement.hidden) {
+    positionConnectWarningTooltip(activeWarningTrigger, connectWarningTooltipElement);
+  }
 });
+
+window.addEventListener(
+  "scroll",
+  () => {
+    if (activeWarningTrigger instanceof HTMLElement && connectWarningTooltipElement instanceof HTMLElement && !connectWarningTooltipElement.hidden) {
+      positionConnectWarningTooltip(activeWarningTrigger, connectWarningTooltipElement);
+    }
+  },
+  true,
+);
 
 window.addEventListener("load", async () => {
   loadUiSettings();

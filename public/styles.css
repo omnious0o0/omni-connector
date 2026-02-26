@@ -991,26 +991,29 @@ body.accounts-density-comfortable .account-card {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .connect-provider-title {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .connect-provider-head-tags {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .connect-provider-head h4 {
   font-size: 0.93rem;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .connect-provider-logo-shell {
@@ -1035,10 +1038,8 @@ body.accounts-density-comfortable .account-card {
 
 .connect-provider-warning-anchor {
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .connect-provider-warning-trigger {
@@ -1073,21 +1074,16 @@ body.accounts-density-comfortable .account-card {
   transform: translateY(-1px);
 }
 
-.connect-provider-warning-panel {
-  display: none;
-  width: min(260px, calc(100vw - 96px));
-  max-width: calc(100vw - 96px);
+.connect-provider-warning-floating {
+  position: fixed;
+  z-index: 260;
+  width: min(320px, calc(100vw - 24px));
   border: 1px solid var(--tooltip-border);
   background: var(--tooltip-bg);
   color: var(--warn-text);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
+  box-shadow: var(--tooltip-shadow);
   padding: 8px 10px;
-  margin-top: 0;
-}
-
-.connect-provider-warning-anchor:hover .connect-provider-warning-panel,
-.connect-provider-warning-anchor:focus-within .connect-provider-warning-panel {
-  display: block;
+  pointer-events: none;
 }
 
 .connect-provider-warning-title {
@@ -1098,14 +1094,14 @@ body.accounts-density-comfortable .account-card {
   margin-bottom: 5px;
 }
 
-.connect-provider-warning-panel ul {
+.connect-provider-warning-floating ul {
   margin: 0;
   padding-left: 16px;
   display: grid;
   gap: 4px;
 }
 
-.connect-provider-warning-panel li {
+.connect-provider-warning-floating li {
   margin: 0;
   font-size: 0.75rem;
   color: var(--warn-text);
