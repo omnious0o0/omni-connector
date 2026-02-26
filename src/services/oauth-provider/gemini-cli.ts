@@ -1,3 +1,5 @@
+import { resilientFetch } from "../http-resilience";
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -119,17 +121,25 @@ export async function fetchGeminiCliProjectId(accessToken: string): Promise<stri
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "omni-connector/1.0",
+    response = await resilientFetch(
+      endpoint,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": "omni-connector/1.0",
+        },
+        body: JSON.stringify(requestBody),
       },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(12_000),
-    });
+      {
+        timeoutMs: 12_000,
+        maxAttempts: 2,
+        baseDelayMs: 300,
+        maxDelayMs: 1_200,
+      },
+    );
   } catch {
     return configuredProjectId;
   }

@@ -1,6 +1,7 @@
 import { AppConfig, ProviderUsageConfig } from "../config";
 import { HttpError } from "../errors";
 import { ConnectedAccount, ProviderId, QuotaWindowMode } from "../types";
+import { resilientFetch } from "./http-resilience";
 
 interface LiveQuotaWindowSnapshot {
   limit: number;
@@ -16,6 +17,8 @@ export interface ProviderLiveQuotaSnapshot {
   planType: string | null;
   creditsBalance: string | null;
   syncedAt: string;
+  partial: boolean;
+  syncError: string | null;
 }
 
 interface ParsedWindowTotals {
@@ -91,6 +94,57 @@ function ensureHttpsUrl(rawUrl: string): string {
   }
 
   return parsed.toString();
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  const redact = (input: string): string =>
+    input
+      .replace(
+        /([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi,
+        "$1[redacted]",
+      )
+      .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]");
+
+  if (error instanceof HttpError) {
+    return redact(error.message);
+  }
+
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return redact(error.message);
+  }
+
+  return redact(fallback);
+}
+
+function fallbackWindowFromAccount(
+  account: ConnectedAccount,
+  window: "fiveHour" | "weekly",
+  fallbackLimit: number,
+): LiveQuotaWindowSnapshot {
+  const source = window === "fiveHour" ? account.quota.fiveHour : account.quota.weekly;
+  const limit = normalizeLimit(source.limit > 0 ? source.limit : fallbackLimit);
+  const used = clampUsed(source.used, limit);
+  const mode = source.mode ?? "units";
+  const windowStartedAt = source.windowStartedAt || new Date().toISOString();
+  const resetsAt = source.resetsAt ?? null;
+
+  return {
+    limit,
+    used,
+    mode,
+    windowStartedAt,
+    resetsAt,
+  };
+}
+
+function unitWindow(limit: number, used: number, syncedAt: string): LiveQuotaWindowSnapshot {
+  return {
+    limit,
+    used,
+    mode: "units",
+    windowStartedAt: syncedAt,
+    resetsAt: null,
+  };
 }
 
 function deepFindNumbers(payload: unknown, keySet: Set<string>, result: number[] = []): number[] {
@@ -342,14 +396,22 @@ function parseJsonTotals(payload: unknown, fallbackLimit: number): ParsedWindowT
 export class ProviderUsageService {
   public constructor(private readonly config: AppConfig) {}
 
+  private hasConfiguredWindowLimits(providerConfig: ProviderUsageConfig): boolean {
+    return normalizeLimit(providerConfig.fiveHourLimit) > 0 && normalizeLimit(providerConfig.weeklyLimit) > 0;
+  }
+
   public isConfigured(providerId: ProviderId): boolean {
     const providerConfig = this.config.providerUsage[providerId];
     if (!providerConfig) {
       return false;
     }
 
-    if (providerConfig.parser === "openai_usage" || providerConfig.parser === "anthropic_usage") {
+    if (providerConfig.parser === "openai_usage") {
       return providerConfig.baseUrl !== null;
+    }
+
+    if (providerConfig.parser === "anthropic_usage") {
+      return providerConfig.baseUrl !== null && this.hasConfiguredWindowLimits(providerConfig);
     }
 
     return providerConfig.fiveHourUrl !== null || providerConfig.weeklyUrl !== null;
@@ -366,15 +428,25 @@ export class ProviderUsageService {
         return false;
       }
 
+      const authMethod = account.authMethod ?? "oauth";
+      const isCodexOAuth = account.provider === "codex" && authMethod === "oauth";
+      if (!isCodexOAuth && !this.hasConfiguredWindowLimits(providerConfig)) {
+        return false;
+      }
+
       if (providerConfig.apiKeyOverride) {
         return true;
       }
 
-      return (account.authMethod ?? "oauth") === "api";
+      return authMethod === "api";
     }
 
     if (providerConfig.parser === "anthropic_usage") {
       if (!providerConfig.baseUrl) {
+        return false;
+      }
+
+      if (!this.hasConfiguredWindowLimits(providerConfig)) {
         return false;
       }
 
@@ -402,17 +474,18 @@ export class ProviderUsageService {
     }
 
     if (providerConfig.parser === "openai_usage") {
-      return this.fetchOpenAiUsageSnapshot(providerConfig, credential);
+      return this.fetchOpenAiUsageSnapshot(account, providerConfig, credential);
     }
 
     if (providerConfig.parser === "anthropic_usage") {
-      return this.fetchAnthropicUsageSnapshot(providerConfig, credential);
+      return this.fetchAnthropicUsageSnapshot(account, providerConfig, credential);
     }
 
-    return this.fetchJsonTotalsSnapshot(providerConfig, credential);
+    return this.fetchJsonTotalsSnapshot(account, providerConfig, credential);
   }
 
   private async fetchOpenAiUsageSnapshot(
+    account: ConnectedAccount,
     providerConfig: ProviderUsageConfig,
     credential: string,
   ): Promise<ProviderLiveQuotaSnapshot | null> {
@@ -432,7 +505,7 @@ export class ProviderUsageService {
     weeklyUrl.searchParams.set("start_time", String(weeklyStart));
     weeklyUrl.searchParams.set("end_time", String(nowSeconds));
 
-    const [fiveHourPayload, weeklyPayload] = await Promise.all([
+    const [fiveHourResult, weeklyResult] = await Promise.allSettled([
       this.fetchJson(fiveHourUrl.toString(), providerConfig, credential),
       this.fetchJson(weeklyUrl.toString(), providerConfig, credential),
     ]);
@@ -444,34 +517,60 @@ export class ProviderUsageService {
     }
 
     const syncedAt = new Date().toISOString();
-    const fiveHourUsed = clampUsed(parseOpenAiBucketUsage(fiveHourPayload), fiveHourLimit);
-    const weeklyUsed = clampUsed(parseOpenAiBucketUsage(weeklyPayload), weeklyLimit);
+    const errors: string[] = [];
+
+    const fiveHourWindow =
+      fiveHourResult.status === "fulfilled"
+        ? unitWindow(fiveHourLimit, clampUsed(parseOpenAiBucketUsage(fiveHourResult.value), fiveHourLimit), syncedAt)
+        : (() => {
+            errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "request failed")}).`);
+            return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
+          })();
+
+    const weeklyWindow =
+      weeklyResult.status === "fulfilled"
+        ? unitWindow(weeklyLimit, clampUsed(parseOpenAiBucketUsage(weeklyResult.value), weeklyLimit), syncedAt)
+        : (() => {
+            errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "request failed")}).`);
+            return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
+          })();
+
+    if (errors.length >= 2) {
+      throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
+    }
+
+    const metadataPayload =
+      fiveHourResult.status === "fulfilled"
+        ? fiveHourResult.value
+        : weeklyResult.status === "fulfilled"
+          ? weeklyResult.value
+          : null;
 
     return {
       fiveHour: {
-        limit: fiveHourLimit,
-        used: fiveHourUsed,
-        mode: "units",
-        windowStartedAt: syncedAt,
-        resetsAt: null,
+        ...fiveHourWindow,
       },
       weekly: {
-        limit: weeklyLimit,
-        used: weeklyUsed,
-        mode: "units",
-        windowStartedAt: syncedAt,
-        resetsAt: null,
+        ...weeklyWindow,
       },
-      planType: deepFindFirstString(fiveHourPayload, new Set(["plan", "plan_type", "tier"])),
+      planType: metadataPayload
+        ? deepFindFirstString(metadataPayload, new Set(["plan", "plan_type", "tier"]))
+        : null,
       creditsBalance:
-        deepFindFirstString(fiveHourPayload, new Set(["credits_balance", "balance"])) ??
+        (metadataPayload
+          ? deepFindFirstString(metadataPayload, new Set(["credits_balance", "balance"]))
+          : null) ??
         (() => {
+          if (!metadataPayload) {
+            return null;
+          }
+
           const totalCredits = deepFindFirstNumber(
-            fiveHourPayload,
+            metadataPayload,
             new Set(["total_credits", "credits_total", "credit_limit"]),
           );
           const totalUsage = deepFindFirstNumber(
-            fiveHourPayload,
+            metadataPayload,
             new Set(["total_usage", "credits_used", "spent"]),
           );
           if (totalCredits === null) {
@@ -482,10 +581,13 @@ export class ProviderUsageService {
           return remaining.toFixed(2);
         })(),
       syncedAt,
+      partial: errors.length > 0,
+      syncError: errors.length > 0 ? errors.join(" ") : null,
     };
   }
 
   private async fetchAnthropicUsageSnapshot(
+    account: ConnectedAccount,
     providerConfig: ProviderUsageConfig,
     credential: string,
   ): Promise<ProviderLiveQuotaSnapshot | null> {
@@ -508,7 +610,7 @@ export class ProviderUsageService {
     weeklyUrl.searchParams.set("ending_at", new Date(nowMs).toISOString());
     weeklyUrl.searchParams.set("bucket_width", "1d");
 
-    const [fiveHourPayload, weeklyPayload] = await Promise.all([
+    const [fiveHourResult, weeklyResult] = await Promise.allSettled([
       this.fetchJson(fiveHourUrl.toString(), providerConfig, credential),
       this.fetchJson(weeklyUrl.toString(), providerConfig, credential),
     ]);
@@ -520,31 +622,56 @@ export class ProviderUsageService {
     }
 
     const syncedAt = new Date().toISOString();
-    const fiveHourUsed = clampUsed(parseAnthropicUsage(fiveHourPayload), fiveHourLimit);
-    const weeklyUsed = clampUsed(parseAnthropicUsage(weeklyPayload), weeklyLimit);
+    const errors: string[] = [];
+
+    const fiveHourWindow =
+      fiveHourResult.status === "fulfilled"
+        ? unitWindow(fiveHourLimit, clampUsed(parseAnthropicUsage(fiveHourResult.value), fiveHourLimit), syncedAt)
+        : (() => {
+            errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "request failed")}).`);
+            return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
+          })();
+
+    const weeklyWindow =
+      weeklyResult.status === "fulfilled"
+        ? unitWindow(weeklyLimit, clampUsed(parseAnthropicUsage(weeklyResult.value), weeklyLimit), syncedAt)
+        : (() => {
+            errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "request failed")}).`);
+            return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
+          })();
+
+    if (errors.length >= 2) {
+      throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
+    }
+
+    const metadataPayload =
+      fiveHourResult.status === "fulfilled"
+        ? fiveHourResult.value
+        : weeklyResult.status === "fulfilled"
+          ? weeklyResult.value
+          : null;
 
     return {
       fiveHour: {
-        limit: fiveHourLimit,
-        used: fiveHourUsed,
-        mode: "units",
-        windowStartedAt: syncedAt,
-        resetsAt: null,
+        ...fiveHourWindow,
       },
       weekly: {
-        limit: weeklyLimit,
-        used: weeklyUsed,
-        mode: "units",
-        windowStartedAt: syncedAt,
-        resetsAt: null,
+        ...weeklyWindow,
       },
-      planType: deepFindFirstString(fiveHourPayload, new Set(["service_tier", "plan", "plan_type"])),
-      creditsBalance: deepFindFirstString(fiveHourPayload, new Set(["credits_balance", "balance"])),
+      planType: metadataPayload
+        ? deepFindFirstString(metadataPayload, new Set(["service_tier", "plan", "plan_type"]))
+        : null,
+      creditsBalance: metadataPayload
+        ? deepFindFirstString(metadataPayload, new Set(["credits_balance", "balance"]))
+        : null,
       syncedAt,
+      partial: errors.length > 0,
+      syncError: errors.length > 0 ? errors.join(" ") : null,
     };
   }
 
   private async fetchJsonTotalsSnapshot(
+    account: ConnectedAccount,
     providerConfig: ProviderUsageConfig,
     credential: string,
   ): Promise<ProviderLiveQuotaSnapshot | null> {
@@ -554,43 +681,95 @@ export class ProviderUsageService {
       return null;
     }
 
-    const [fiveHourPayload, weeklyPayload] = await Promise.all([
+    const [fiveHourResult, weeklyResult] = await Promise.allSettled([
       this.fetchJson(fiveHourUrl, providerConfig, credential),
       this.fetchJson(weeklyUrl, providerConfig, credential),
     ]);
 
-    const fiveHour = parseJsonTotals(fiveHourPayload, providerConfig.fiveHourLimit);
-    const weekly = parseJsonTotals(weeklyPayload, providerConfig.weeklyLimit);
-    if (!fiveHour || !weekly) {
-      return null;
+    const syncedAt = new Date().toISOString();
+    const errors: string[] = [];
+
+    const fiveHourParsed =
+      fiveHourResult.status === "fulfilled"
+        ? parseJsonTotals(fiveHourResult.value, providerConfig.fiveHourLimit)
+        : null;
+    const weeklyParsed =
+      weeklyResult.status === "fulfilled"
+        ? parseJsonTotals(weeklyResult.value, providerConfig.weeklyLimit)
+        : null;
+
+    const fiveHourWindow =
+      fiveHourParsed !== null
+        ? {
+            limit: fiveHourParsed.limit,
+            used: clampUsed(fiveHourParsed.used, fiveHourParsed.limit),
+            mode: fiveHourParsed.mode,
+            windowStartedAt: syncedAt,
+            resetsAt: null,
+          }
+        : (() => {
+            const reason =
+              fiveHourResult.status === "rejected"
+                ? errorMessage(fiveHourResult.reason, "request failed")
+                : "response had no usable quota fields";
+            errors.push(`5h usage fetch failed (${reason}).`);
+            return fallbackWindowFromAccount(account, "fiveHour", normalizeLimit(providerConfig.fiveHourLimit));
+          })();
+
+    const weeklyWindow =
+      weeklyParsed !== null
+        ? {
+            limit: weeklyParsed.limit,
+            used: clampUsed(weeklyParsed.used, weeklyParsed.limit),
+            mode: weeklyParsed.mode,
+            windowStartedAt: syncedAt,
+            resetsAt: null,
+          }
+        : (() => {
+            const reason =
+              weeklyResult.status === "rejected"
+                ? errorMessage(weeklyResult.reason, "request failed")
+                : "response had no usable quota fields";
+            errors.push(`7d usage fetch failed (${reason}).`);
+            return fallbackWindowFromAccount(account, "weekly", normalizeLimit(providerConfig.weeklyLimit));
+          })();
+
+    if (errors.length >= 2) {
+      throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
     }
 
-    const syncedAt = new Date().toISOString();
+    const metadataPayload =
+      fiveHourResult.status === "fulfilled"
+        ? fiveHourResult.value
+        : weeklyResult.status === "fulfilled"
+          ? weeklyResult.value
+          : null;
+
     return {
       fiveHour: {
-        limit: fiveHour.limit,
-        used: clampUsed(fiveHour.used, fiveHour.limit),
-        mode: fiveHour.mode,
-        windowStartedAt: syncedAt,
-        resetsAt: null,
+        ...fiveHourWindow,
       },
       weekly: {
-        limit: weekly.limit,
-        used: clampUsed(weekly.used, weekly.limit),
-        mode: weekly.mode,
-        windowStartedAt: syncedAt,
-        resetsAt: null,
+        ...weeklyWindow,
       },
-      planType: deepFindFirstString(fiveHourPayload, new Set(["plan", "plan_type", "tier", "service_tier"])),
+      planType: metadataPayload
+        ? deepFindFirstString(metadataPayload, new Set(["plan", "plan_type", "tier", "service_tier"]))
+        : null,
       creditsBalance:
-        deepFindFirstString(fiveHourPayload, new Set(["credits_balance", "balance", "remaining_credits"])) ??
+        (metadataPayload
+          ? deepFindFirstString(metadataPayload, new Set(["credits_balance", "balance", "remaining_credits"]))
+          : null) ??
         (() => {
+          if (!metadataPayload) {
+            return null;
+          }
+
           const totalCredits = deepFindFirstNumber(
-            fiveHourPayload,
+            metadataPayload,
             new Set(["total_credits", "credits_total", "credit_limit"]),
           );
           const totalUsage = deepFindFirstNumber(
-            fiveHourPayload,
+            metadataPayload,
             new Set(["total_usage", "credits_used", "spent"]),
           );
           if (totalCredits === null) {
@@ -601,6 +780,8 @@ export class ProviderUsageService {
           return remaining.toFixed(2);
         })(),
       syncedAt,
+      partial: errors.length > 0,
+      syncError: errors.length > 0 ? errors.join(" ") : null,
     };
   }
 
@@ -626,13 +807,21 @@ export class ProviderUsageService {
 
     let response: Response;
     try {
-      response = await fetch(url.toString(), {
-        method: "GET",
-        headers,
-        signal: AbortSignal.timeout(15_000),
-      });
+      response = await resilientFetch(
+        url.toString(),
+        {
+          method: "GET",
+          headers,
+        },
+        {
+          timeoutMs: 15_000,
+          maxAttempts: 2,
+          baseDelayMs: 100,
+          maxDelayMs: 300,
+        },
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Usage fetch failed.";
+      const message = errorMessage(error, "Usage fetch failed.");
       throw new HttpError(502, "provider_usage_fetch_failed", message);
     }
 
@@ -644,6 +833,10 @@ export class ProviderUsageService {
       );
     }
 
-    return (await response.json().catch(() => null)) as unknown;
+    try {
+      return (await response.json()) as unknown;
+    } catch {
+      throw new HttpError(502, "provider_usage_parse_failed", "Usage endpoint returned invalid JSON.");
+    }
   }
 }

@@ -11,6 +11,7 @@ import {
   extractCodexRateLimitPayload,
   fetchGeminiCliProjectId,
 } from "./oauth-provider/index";
+import { resilientFetch } from "./http-resilience";
 
 export { extractGeminiCliProjectId } from "./oauth-provider/index";
 
@@ -72,6 +73,8 @@ interface LiveQuotaSnapshot {
   planType: string | null;
   creditsBalance: string | null;
   syncedAt: string;
+  partial: boolean;
+  syncError: string | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -444,9 +447,6 @@ function errnoCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-const FALLBACK_MANUAL_FIVE_HOUR_LIMIT = 50_000;
-const FALLBACK_MANUAL_WEEKLY_LIMIT = 500_000;
-
 export class OAuthProviderService {
   public constructor(private readonly config: AppConfig) {}
 
@@ -670,13 +670,13 @@ export class OAuthProviderService {
         ? usageDefaults.fiveHourLimit
         : this.config.defaultFiveHourLimit > 0
           ? this.config.defaultFiveHourLimit
-          : FALLBACK_MANUAL_FIVE_HOUR_LIMIT;
+          : 0;
     const weeklyLimit =
       usageDefaults && usageDefaults.weeklyLimit > 0
         ? usageDefaults.weeklyLimit
         : this.config.defaultWeeklyLimit > 0
           ? this.config.defaultWeeklyLimit
-          : FALLBACK_MANUAL_WEEKLY_LIMIT;
+          : 0;
     const nowIso = new Date().toISOString();
 
     return {
@@ -690,8 +690,7 @@ export class OAuthProviderService {
       tokenExpiresAt: tokenPayload.tokenExpiresAt,
       quotaSyncedAt: nowIso,
       quotaSyncStatus: fiveHourLimit > 0 && weeklyLimit > 0 ? "stale" : "unavailable",
-      quotaSyncError:
-        "OAuth linked. Configure provider usage endpoints/credentials for live quota sync.",
+      quotaSyncError: null,
       planType: null,
       creditsBalance: null,
       quota: {
@@ -879,6 +878,8 @@ export class OAuthProviderService {
       planType,
       creditsBalance,
       syncedAt,
+      partial: false,
+      syncError: null,
     };
   }
 
@@ -1114,11 +1115,20 @@ export class OAuthProviderService {
           headers["ChatGPT-Account-Id"] = chatgptAccountId;
         }
 
-        const response = await fetch(endpoint, {
-          method: "GET",
-          headers,
-          signal: AbortSignal.timeout(12_000),
-        });
+        const response = await resilientFetch(
+          endpoint,
+          {
+            method: "GET",
+            headers,
+          },
+          {
+            timeoutMs: 12_000,
+            maxAttempts: 3,
+            baseDelayMs: 400,
+            maxDelayMs: 2_000,
+            retryableStatusCodes: new Set([408, 425, 500, 502, 503, 504]),
+          },
+        );
 
         if (!response.ok) {
           if (response.status === 429) {
@@ -1280,15 +1290,23 @@ export class OAuthProviderService {
 
     let response: Response;
     try {
-      response = await fetch(safeTokenUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
+      response = await resilientFetch(
+        safeTokenUrl,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: form,
         },
-        body: form,
-        signal: AbortSignal.timeout(12_000),
-      });
+        {
+          timeoutMs: 12_000,
+          maxAttempts: 3,
+          baseDelayMs: 400,
+          maxDelayMs: 2_000,
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "OAuth token request failed.";
       throw new HttpError(502, "oauth_token_request_failed", message);
@@ -1305,15 +1323,23 @@ export class OAuthProviderService {
 
     let response: Response;
     try {
-      response = await fetch(safeTokenUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
+      response = await resilientFetch(
+        safeTokenUrl,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(12_000),
-      });
+        {
+          timeoutMs: 12_000,
+          maxAttempts: 3,
+          baseDelayMs: 400,
+          maxDelayMs: 2_000,
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "OAuth token request failed.";
       throw new HttpError(502, "oauth_token_request_failed", message);
@@ -1336,14 +1362,22 @@ export class OAuthProviderService {
 
     let response: Response;
     try {
-      response = await fetch(ensureHttpsUrl(userInfoUrl), {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
+      response = await resilientFetch(
+        ensureHttpsUrl(userInfoUrl),
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
         },
-        signal: AbortSignal.timeout(10_000),
-      });
+        {
+          timeoutMs: 10_000,
+          maxAttempts: 2,
+          baseDelayMs: 350,
+          maxDelayMs: 1_500,
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "OAuth user info request failed.";
       throw new HttpError(502, "oauth_userinfo_failed", message);
