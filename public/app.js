@@ -762,8 +762,8 @@ function accountStateIndicator(account, fiveHour, weekly) {
   return { className: "is-green", label: "Online" };
 }
 
-function providerIdentityForAccount(account) {
-  const providerId = typeof account?.provider === "string" ? account.provider.toLowerCase() : "unknown";
+function providerVisualIdentity(providerValue) {
+  const providerId = typeof providerValue === "string" ? providerValue.toLowerCase() : "unknown";
   const logoByProvider = {
     codex: { src: "/assets/openai.svg", alt: "OpenAI logo" },
     gemini: { src: "/assets/google.svg", alt: "Google logo" },
@@ -782,6 +782,10 @@ function providerIdentityForAccount(account) {
     logoAlt: resolvedLogo.alt,
     logoClass: `is-${providerId}`,
   };
+}
+
+function providerIdentityForAccount(account) {
+  return providerVisualIdentity(account?.provider);
 }
 
 function quotaWindowPresentation(windowData) {
@@ -1197,6 +1201,7 @@ function renderConnectProviderCards() {
             ? uniqueOAuthConfigurationHints.join(" ")
             : "OAuth is not configured for this provider."
           : null;
+      const providerIdentity = providerVisualIdentity(provider.id);
       const note =
         oauthNotConfiguredMessage
           ? `<p class="connect-provider-note">${escapeHtml(oauthNotConfiguredMessage)}</p>`
@@ -1204,9 +1209,12 @@ function renderConnectProviderCards() {
             ? '<p class="connect-provider-note">Strict live quota mode: usage adapter is not configured for this provider.</p>'
             : "";
       const recommendationTag = provider.recommended
-        ? '<span class="connect-provider-recommended">recommended</span>'
+        ? '<span class="connect-provider-recommended">recomended</span>'
         : "";
-      const warningTooltip = warnings.length > 0
+      const headTags = recommendationTag
+        ? `<div class="connect-provider-head-tags">${recommendationTag}</div>`
+        : "";
+      const warningTrigger = warnings.length > 0
         ? `
           <div class="connect-provider-warning-anchor">
             <button
@@ -1217,12 +1225,16 @@ function renderConnectProviderCards() {
             >
               <i data-lucide="triangle-alert"></i>
             </button>
-            <div class="connect-provider-warning-tooltip" role="tooltip">
-              <p class="connect-provider-warning-title">Warnings</p>
-              <ul>
-                ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
-              </ul>
-            </div>
+          </div>
+        `
+        : "";
+      const warningPanel = warnings.length > 0
+        ? `
+          <div class="connect-provider-warning-panel" role="note" aria-live="polite">
+            <p class="connect-provider-warning-title">Warnings</p>
+            <ul>
+              ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+            </ul>
           </div>
         `
         : "";
@@ -1231,18 +1243,25 @@ function renderConnectProviderCards() {
         <article class="connect-provider-card">
           <header class="connect-provider-head">
             <div class="connect-provider-title">
+              <span class="connect-provider-logo-shell ${escapeHtml(providerIdentity.logoClass)}" aria-hidden="true">
+                <img
+                  class="connect-provider-logo ${escapeHtml(providerIdentity.logoClass)}"
+                  src="${escapeHtml(providerIdentity.logoSrc)}"
+                  alt="${escapeHtml(providerIdentity.logoAlt)}"
+                  loading="lazy"
+                  decoding="async"
+                />
+              </span>
               <h4>${escapeHtml(provider.name)}</h4>
-              ${warningTooltip}
+              ${warningTrigger}
             </div>
-            <div class="connect-provider-head-tags">
-              <span class="connect-provider-tag">${escapeHtml(provider.id)}</span>
-              ${recommendationTag}
-            </div>
+            ${headTags}
           </header>
           <div class="connect-provider-actions">
             ${oauthButtons}
             ${apiButton}
           </div>
+          ${warningPanel}
           ${note}
         </article>
       `;

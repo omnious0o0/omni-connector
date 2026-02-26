@@ -940,7 +940,8 @@ body.accounts-density-comfortable .account-card {
   position: relative;
   width: min(760px, calc(100vw - 24px));
   max-height: calc(100vh - 36px);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: linear-gradient(180deg, #15171c 0%, #101216 100%);
   border: 1px solid var(--border-strong);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.52);
@@ -972,9 +973,12 @@ body.accounts-density-comfortable .account-card {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  min-width: 0;
 }
 
 .connect-provider-card {
+  position: relative;
+  overflow: visible;
   border: 1px solid var(--border-light);
   background: var(--surface-hover-muted);
   padding: 10px;
@@ -987,7 +991,7 @@ body.accounts-density-comfortable .account-card {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .connect-provider-title {
@@ -1006,10 +1010,30 @@ body.accounts-density-comfortable .account-card {
 .connect-provider-head h4 {
   font-size: 0.93rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.connect-provider-logo-shell {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  background: #ffffff;
+  border-radius: var(--radius-sm);
+}
+
+.connect-provider-logo {
+  width: 12px;
+  height: 12px;
+  display: block;
+  object-fit: contain;
+  filter: grayscale(1) brightness(0);
 }
 
 .connect-provider-warning-anchor {
-  position: relative;
   display: inline-flex;
   align-items: center;
 }
@@ -1046,30 +1070,21 @@ body.accounts-density-comfortable .account-card {
   transform: translateY(-1px);
 }
 
-.connect-provider-warning-tooltip {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  width: min(320px, calc(100vw - 64px));
+.connect-provider-warning-panel {
+  display: none;
+  width: 100%;
+  max-width: 100%;
   border: 1px solid var(--tooltip-border);
   background: var(--tooltip-bg);
   color: var(--warn-text);
-  box-shadow: var(--tooltip-shadow);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
   padding: 8px 10px;
-  z-index: 15;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(4px);
-  transition:
-    opacity var(--motion-base) var(--easing-standard),
-    transform var(--motion-base) var(--easing-standard);
+  margin-top: 2px;
 }
 
-.connect-provider-warning-anchor:hover .connect-provider-warning-tooltip,
-.connect-provider-warning-anchor:focus-within .connect-provider-warning-tooltip {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
+.connect-provider-card:has(.connect-provider-warning-anchor:hover) .connect-provider-warning-panel,
+.connect-provider-card:has(.connect-provider-warning-anchor:focus-within) .connect-provider-warning-panel {
+  display: block;
 }
 
 .connect-provider-warning-title {
@@ -1080,25 +1095,18 @@ body.accounts-density-comfortable .account-card {
   margin-bottom: 5px;
 }
 
-.connect-provider-warning-tooltip ul {
+.connect-provider-warning-panel ul {
   margin: 0;
   padding-left: 16px;
   display: grid;
   gap: 4px;
 }
 
-.connect-provider-warning-tooltip li {
+.connect-provider-warning-panel li {
   margin: 0;
   font-size: 0.75rem;
   color: var(--warn-text);
-}
-
-.connect-provider-tag {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  border: 1px solid var(--border-light);
-  padding: 2px 6px;
+  overflow-wrap: anywhere;
 }
 
 .connect-provider-recommended {
@@ -1120,6 +1128,7 @@ body.accounts-density-comfortable .account-card {
 .connect-provider-note {
   font-size: 0.77rem;
   color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
 
 .connect-provider-empty {
