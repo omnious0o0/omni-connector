@@ -20,7 +20,6 @@ interface OAuthPendingFlowState {
 
 const PENDING_FLOW_TTL_MS = 20 * 60 * 1000;
 const MAX_PENDING_FLOWS = 24;
-const inMemoryPendingFlows = new Map<string, OAuthPendingFlowState>();
 
 function prunePendingFlows(input: Record<string, OAuthPendingFlowState> | undefined): Record<string, OAuthPendingFlowState> {
   if (!input) {
@@ -53,49 +52,6 @@ function prunePendingFlows(input: Record<string, OAuthPendingFlowState> | undefi
   return next;
 }
 
-function pruneInMemoryPendingFlows(): void {
-  const nowMs = Date.now();
-  const entries = [...inMemoryPendingFlows.entries()]
-    .map(([state, flow]) => {
-      const createdAtMs = Date.parse(flow.createdAt);
-      if (Number.isNaN(createdAtMs)) {
-        return null;
-      }
-
-      if (nowMs - createdAtMs > PENDING_FLOW_TTL_MS) {
-        return null;
-      }
-
-      return [state, flow, createdAtMs] as const;
-    })
-    .filter((entry): entry is readonly [string, OAuthPendingFlowState, number] => entry !== null)
-    .sort((a, b) => b[2] - a[2])
-    .slice(0, MAX_PENDING_FLOWS);
-
-  inMemoryPendingFlows.clear();
-  for (const [state, flow] of entries) {
-    inMemoryPendingFlows.set(state, flow);
-  }
-}
-
-function buildLegacyFlowIfAvailable(req: Request, state: string): OAuthPendingFlowState | null {
-  if (req.session.oauthState !== state) {
-    return null;
-  }
-
-  if (!req.session.oauthRedirectUri || !req.session.oauthCodeVerifier || !req.session.oauthProviderId) {
-    return null;
-  }
-
-  return {
-    redirectUri: req.session.oauthRedirectUri,
-    codeVerifier: req.session.oauthCodeVerifier,
-    providerId: req.session.oauthProviderId,
-    profileId: req.session.oauthProfileId ?? "oauth",
-    createdAt: new Date().toISOString(),
-  };
-}
-
 function clearLegacyOAuthSessionState(req: Request): void {
   req.session.oauthState = undefined;
   req.session.oauthRedirectUri = undefined;
@@ -122,6 +78,10 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
   };
 
   const resolveOAuthClientIdEnv = (providerId: ProviderId, profileId: string): string | null => {
+    if (providerId === "codex" && profileId === "oauth") {
+      return "OAUTH_CLIENT_ID";
+    }
+
     const definition = providerOAuthProfileDefinitions(providerId).find((candidate) => candidate.id === profileId);
     if (!definition) {
       return null;
@@ -135,10 +95,10 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
       const requiredClientIdEnv = resolveOAuthClientIdEnv(providerId, profileId);
       const message = requiredClientIdEnv
         ? providerId === "gemini" && profileId === "gemini-cli"
-          ? `OAuth profile is not configured for ${providerId}/${profileId}. Install @google/gemini-cli so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+          ? `OAuth profile is not configured for ${providerId}/${profileId}. Install @google/gemini-cli for auto-discovery, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
           : providerId === "gemini" && profileId === "antigravity"
-            ? `OAuth profile is not configured for ${providerId}/${profileId}. Install Antigravity or OpenClaw so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
-          : `OAuth profile is not configured for ${providerId}/${profileId}. Set ${requiredClientIdEnv} in .env and restart omni-connector.`
+            ? `OAuth profile is not configured for ${providerId}/${profileId}. Install Antigravity or OpenClaw for auto-discovery, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+            : `OAuth profile is not configured for ${providerId}/${profileId}. Set ${requiredClientIdEnv} in .env and restart omni-connector.`
         : `OAuth profile is not configured for ${providerId}/${profileId}.`;
       throw new HttpError(503, "oauth_not_configured", message);
     }
@@ -148,7 +108,6 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     const codeChallenge = dependencies.oauthProviderService.createPkceChallenge(codeVerifier);
     const redirectUri = dependencies.oauthProviderService.redirectUriFor(providerId, profileId);
 
-    pruneInMemoryPendingFlows();
     const pendingFlows = prunePendingFlows(req.session.oauthPendingFlows);
     const flow: OAuthPendingFlowState = {
       redirectUri,
@@ -159,7 +118,6 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     };
 
     pendingFlows[state] = flow;
-    inMemoryPendingFlows.set(state, flow);
 
     req.session.oauthPendingFlows = pendingFlows;
     req.session.oauthState = state;
@@ -208,18 +166,15 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     const oauthError = req.query.error;
 
     if (typeof oauthError === "string") {
-      const errorDescription =
-        typeof req.query.error_description === "string" ? req.query.error_description : "OAuth provider returned an error.";
-      throw new HttpError(400, "oauth_provider_error", `${oauthError}: ${errorDescription}`);
+      throw new HttpError(400, "oauth_provider_error", "OAuth provider returned an error.");
     }
 
     if (typeof state !== "string" || typeof code !== "string") {
       throw new HttpError(400, "invalid_oauth_callback", "OAuth callback is missing code or state.");
     }
 
-    pruneInMemoryPendingFlows();
     const pendingFlows = prunePendingFlows(req.session.oauthPendingFlows);
-    const flow = pendingFlows[state] ?? inMemoryPendingFlows.get(state) ?? buildLegacyFlowIfAvailable(req, state);
+    const flow = pendingFlows[state];
 
     if (!flow) {
       if (req.session.oauthLastCompletedState === state) {
@@ -256,7 +211,6 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     dependencies.connectorService.linkOAuthAccount(linkedAccount);
     delete pendingFlows[state];
     req.session.oauthPendingFlows = pendingFlows;
-    inMemoryPendingFlows.delete(state);
     req.session.oauthLastCompletedState = state;
     clearLegacyOAuthSessionState(req);
     req.session.dashboardAuthorized = true;

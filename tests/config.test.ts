@@ -44,15 +44,12 @@ test("uses provider OAuth defaults compatible with live token endpoints", () => 
 
   const geminiCli = config.oauthProfiles.gemini.find((profile) => profile.id === "gemini-cli");
   const geminiAntigravity = config.oauthProfiles.gemini.find((profile) => profile.id === "antigravity");
-  const claudeProfile = config.oauthProfiles.claude.find((profile) => profile.id === "claude-code");
 
   assert.ok(geminiCli);
   assert.ok(geminiAntigravity);
-  assert.ok(claudeProfile);
 
   assert.equal(geminiCli?.tokenUrl, "https://oauth2.googleapis.com/token");
   assert.equal(geminiAntigravity?.tokenUrl, "https://oauth2.googleapis.com/token");
-  assert.equal(claudeProfile?.tokenUrl, "https://console.anthropic.com/v1/oauth/token");
 });
 
 test("auto-discovers Gemini OAuth client credentials from installed CLI bundle", () => {
@@ -158,4 +155,55 @@ test("auto-discovers Antigravity OAuth client credentials from OpenClaw bundle",
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("defaults data file path to home runtime directory when DATA_FILE is unset", () => {
+  const config = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+  });
+
+  assert.equal(config.dataFilePath, path.join(os.homedir(), ".omni-connector", "data", "store.json"));
+});
+
+test("requires loopback OAuth redirect URI when remote dashboard is disabled", () => {
+  assert.throws(
+    () =>
+      resolveConfig({
+        HOST: "127.0.0.1",
+        PORT: "1455",
+        SESSION_SECRET: "test-session-secret",
+        PUBLIC_DIR: path.join(process.cwd(), "public"),
+        OAUTH_REDIRECT_URI: "https://example.com/auth/callback",
+      }),
+    /OAUTH_REDIRECT_URI must use a loopback host unless ALLOW_REMOTE_DASHBOARD=true/,
+  );
+});
+
+test("requires HTTPS OAuth redirect URI for remote non-loopback hosts", () => {
+  assert.throws(
+    () =>
+      resolveConfig({
+        HOST: "0.0.0.0",
+        ALLOW_REMOTE_DASHBOARD: "true",
+        PORT: "1455",
+        SESSION_SECRET: "test-session-secret",
+        PUBLIC_DIR: path.join(process.cwd(), "public"),
+        OAUTH_REDIRECT_URI: "http://example.com/auth/callback",
+      }),
+    /OAUTH_REDIRECT_URI must use HTTPS for non-loopback hosts/,
+  );
+
+  const config = resolveConfig({
+    HOST: "0.0.0.0",
+    ALLOW_REMOTE_DASHBOARD: "true",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    OAUTH_REDIRECT_URI: "https://example.com/auth/callback",
+  });
+
+  assert.equal(config.oauthRedirectUri, "https://example.com/auth/callback");
 });

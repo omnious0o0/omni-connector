@@ -10,7 +10,8 @@ const geminiProvider: ProviderModule = {
     name: "Google (Gemini)",
     methods: ["oauth", "api"],
     warnings: [
-      "OAuth access for Gemini providers can be unstable or blocked by Google. Use at your own risk.",
+      "Gemini CLI OAuth may violate provider terms. Use at your own risk.",
+      "Antigravity OAuth may violate provider terms. Use at your own risk.",
     ],
   },
   oauthProfiles: [

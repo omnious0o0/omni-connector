@@ -4,23 +4,9 @@ const claudeProvider: ProviderModule = {
   descriptor: {
     id: "claude",
     name: "Anthropic (Claude)",
-    methods: ["oauth", "api"],
+    methods: ["api"],
   },
-  oauthProfiles: [
-    {
-      providerId: "claude",
-      envPrefix: "CLAUDE_CODE",
-      id: "claude-code",
-      defaults: {
-        label: "Claude Code",
-        authorizationUrl: "https://console.anthropic.com/oauth/authorize",
-        tokenUrl: "https://console.anthropic.com/v1/oauth/token",
-        userInfoUrl: "https://api.anthropic.com/v1/user",
-        scopes: "user:inference user:profile",
-        clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-      },
-    },
-  ],
+  oauthProfiles: [],
   usage: {
     providerId: "claude",
     envPrefix: "CLAUDE",

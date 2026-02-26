@@ -65,7 +65,7 @@ test("extractGeminiCliProjectId returns null when payload has no project identif
   assert.equal(extractGeminiCliProjectId(null), null);
 });
 
-test("exchangeCodeFor claude requires oauth state at service level", async () => {
+test("exchangeCodeFor claude rejects because OAuth profile is unavailable", async () => {
   const service = createService();
 
   await assert.rejects(
@@ -75,7 +75,7 @@ test("exchangeCodeFor claude requires oauth state at service level", async () =>
         redirectUri: "http://localhost:1455/auth/callback",
         codeVerifier: "pkce-verifier",
       }),
-    (error: unknown) => error instanceof HttpError && error.status === 400 && error.code === "missing_oauth_state",
+    (error: unknown) => error instanceof HttpError && error.status === 404 && error.code === "oauth_profile_not_found",
   );
 });
 

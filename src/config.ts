@@ -1,6 +1,7 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { PROVIDER_CATALOG, providerOAuthProfileDefinitions, providerUsageDefinition } from "./providers";
 import { ProviderId } from "./types";
 
@@ -131,6 +132,32 @@ function parseOptionalUrl(rawValue: string | undefined): string | null {
 
 function parseRequiredUrl(rawValue: string | undefined, fallback: string): string {
   return parseOptionalUrl(rawValue) ?? fallback;
+}
+
+function enforceOAuthRedirectUriPolicy(rawValue: string, allowRemoteDashboard: boolean): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawValue);
+  } catch {
+    throw new Error("OAUTH_REDIRECT_URI must be a valid URL.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("OAUTH_REDIRECT_URI must use http:// or https://.");
+  }
+
+  const isLoopbackRedirect = isLoopbackHost(parsed.hostname);
+  if (!allowRemoteDashboard && !isLoopbackRedirect) {
+    throw new Error(
+      `OAUTH_REDIRECT_URI must use a loopback host unless ALLOW_REMOTE_DASHBOARD=true. Received ${parsed.hostname}.`,
+    );
+  }
+
+  if (allowRemoteDashboard && !isLoopbackRedirect && parsed.protocol !== "https:") {
+    throw new Error("OAUTH_REDIRECT_URI must use HTTPS for non-loopback hosts.");
+  }
+
+  return parsed.toString();
 }
 
 function parseCommandArgs(rawValue: string | undefined, fallback: string[]): string[] {
@@ -815,7 +842,7 @@ function resolveSessionSecret(rawValue: string | undefined, sessionSecretFilePat
 
 export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const port = parsePort(env.PORT);
-  const dataFilePath = env.DATA_FILE ?? path.join(process.cwd(), "data", "store.json");
+  const dataFilePath = env.DATA_FILE ?? path.join(os.homedir(), ".omni-connector", "data", "store.json");
   const publicDir = env.PUBLIC_DIR ?? path.join(process.cwd(), "public");
   const sessionSecretFilePath = resolveSessionSecretFilePath(env.SESSION_SECRET_FILE, dataFilePath);
   const host = parseHost(env.HOST);
@@ -823,7 +850,11 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const strictLiveQuota = parseBoolean(env.STRICT_LIVE_QUOTA, false);
   const providerUsage = parseProviderUsageConfigMap(env);
   const oauthProfiles = parseOAuthProfiles(env);
-  const defaultRedirectUri = "http://localhost:1455/auth/callback";
+  const defaultRedirectUri = `http://localhost:${port}/auth/callback`;
+  const oauthRedirectUri = enforceOAuthRedirectUriPolicy(
+    parseRequiredUrl(env.OAUTH_REDIRECT_URI, defaultRedirectUri),
+    allowRemoteDashboard,
+  );
 
   if (!allowRemoteDashboard && !isLoopbackHost(host)) {
     throw new Error(
@@ -839,7 +870,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dataFilePath,
     publicDir,
     sessionSecret: resolveSessionSecret(env.SESSION_SECRET, sessionSecretFilePath),
-    oauthRedirectUri: parseRequiredUrl(env.OAUTH_REDIRECT_URI, defaultRedirectUri),
+    oauthRedirectUri,
     oauthProviderName: nonEmptyEnvValue(env.OAUTH_PROVIDER_NAME) ?? "OpenAI",
     oauthAuthorizationUrl: parseRequiredUrl(
       nonEmptyEnvValue(env.OAUTH_AUTHORIZATION_URL) ?? undefined,
