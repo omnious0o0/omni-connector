@@ -568,6 +568,54 @@ body.accounts-density-comfortable .account-card {
   flex-shrink: 0;
 }
 
+.account-provider-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-provider-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-provider-logo-shell {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.account-provider-logo {
+  width: 12px;
+  height: 12px;
+  display: block;
+  object-fit: contain;
+  filter: grayscale(1) brightness(0);
+}
+
+.account-provider-id {
+  font-family: var(--font-mono);
+  font-size: 0.69rem;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-settings-btn {
+  flex-shrink: 0;
+}
+
 .account-state-dot {
   width: 8px;
   height: 8px;
@@ -662,6 +710,15 @@ body.accounts-density-comfortable .account-card {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-note-msg {
+  font-size: 0.72rem;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.08);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(59, 130, 246, 0.24);
 }
 
 .empty-state {
@@ -1005,6 +1062,56 @@ body.accounts-density-comfortable .account-card {
   margin-top: 6px;
 }
 
+.account-settings-panel {
+  width: min(560px, calc(100vw - 24px));
+}
+
+.account-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-settings-meta {
+  border: 1px solid var(--border-light);
+  background: rgba(255, 255, 255, 0.015);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-settings-meta span {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.account-settings-meta strong {
+  font-family: var(--font-mono);
+  font-size: 0.77rem;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
+.account-settings-api-limits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .settings-page {
   display: flex;
   flex-direction: column;
@@ -1264,5 +1371,9 @@ body.accounts-density-comfortable .account-card {
 
   .switch-control {
     margin-top: 2px;
+  }
+
+  .account-settings-grid {
+    grid-template-columns: 1fr;
   }
 }

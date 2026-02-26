@@ -42,7 +42,24 @@ const apiLinkProviderAccountIdInput = document.querySelector("#api-link-provider
 const apiLinkKeyInput = document.querySelector("#api-link-key");
 const apiLinkManualFiveHourInput = document.querySelector("#api-link-manual-5h");
 const apiLinkManualWeeklyInput = document.querySelector("#api-link-manual-7d");
+const apiLinkManualFiveHourLabel = document.querySelector('label[for="api-link-manual-5h"]');
+const apiLinkManualWeeklyLabel = document.querySelector('label[for="api-link-manual-7d"]');
+const apiLinkManualNoteElement = document.querySelector("#api-link-manual-note");
 const apiLinkCancelButton = document.querySelector("#api-link-cancel");
+const accountSettingsModalElement = document.querySelector("#account-settings-modal");
+const accountSettingsCloseButton = document.querySelector("#account-settings-close");
+const accountSettingsForm = document.querySelector("#account-settings-form");
+const accountSettingsProviderElement = document.querySelector("#account-settings-provider");
+const accountSettingsAuthElement = document.querySelector("#account-settings-auth");
+const accountSettingsProviderAccountElement = document.querySelector("#account-settings-provider-account");
+const accountSettingsOAuthProfileWrapperElement = document.querySelector("#account-settings-oauth-profile-wrapper");
+const accountSettingsOAuthProfileElement = document.querySelector("#account-settings-oauth-profile");
+const accountSettingsSyncStatusElement = document.querySelector("#account-settings-sync-status");
+const accountSettingsDisplayNameInput = document.querySelector("#account-settings-display-name");
+const accountSettingsApiLimitsElement = document.querySelector("#account-settings-api-limits");
+const accountSettingsFiveHourInput = document.querySelector("#account-settings-5h");
+const accountSettingsWeeklyInput = document.querySelector("#account-settings-7d");
+const accountSettingsCancelButton = document.querySelector("#account-settings-cancel");
 
 let dashboard = null;
 let toastTimer = null;
@@ -68,11 +85,13 @@ let lastRoutePayload = null;
 let clockTimer = null;
 let providerConfigured = null;
 let dashboardLoaded = false;
-let dashboardHasSyncIssues = false;
 let statusError = false;
 let connectProviders = [];
 let selectedApiProviderId = null;
+let apiLinkManualLimitsEnabled = false;
 let connectModalPreviousFocus = null;
+let accountSettingsPreviousFocus = null;
+let selectedAccountSettingsId = null;
 let strictLiveQuotaEnabled = false;
 
 const MIN_SIDEBAR_WIDTH = 220;
@@ -165,7 +184,9 @@ function persistUiSettings() {
     } else {
       window.localStorage.removeItem(STORAGE_KEYS.activeView);
     }
-  } catch {}
+  } catch {
+    return;
+  }
 }
 
 function loadUiSettings() {
@@ -192,7 +213,9 @@ function loadUiSettings() {
       if (storedView === "settings") {
         currentView = "settings";
       }
-    } catch {}
+    } catch {
+      return;
+    }
   }
 }
 
@@ -454,11 +477,6 @@ function refreshTopbarStatus() {
     return;
   }
 
-  if (dashboardHasSyncIssues) {
-    setTopbarStatus("preparing");
-    return;
-  }
-
   setTopbarStatus("online");
 }
 
@@ -507,8 +525,9 @@ function formatPercentValue(value) {
   return `${Math.round(safeValue)}%`;
 }
 
-function isPercentModeWindow(windowData) {
-  return windowData && windowData.mode === "percent";
+function clampRatio(ratio) {
+  const safeRatio = Number.isFinite(ratio) ? ratio : 0;
+  return Math.max(Math.min(safeRatio, 1), 0);
 }
 
 function maskAuthorizationHeader(headerValue) {
@@ -743,26 +762,85 @@ function accountStateIndicator(account, fiveHour, weekly) {
   return { className: "is-green", label: "Online" };
 }
 
+function providerIdentityForAccount(account) {
+  const providerId = typeof account?.provider === "string" ? account.provider.toLowerCase() : "unknown";
+  const logoByProvider = {
+    codex: { src: "/assets/openai.svg", alt: "OpenAI logo" },
+    gemini: { src: "/assets/google.svg", alt: "Google logo" },
+    claude: { src: "/assets/anthropic.svg", alt: "Anthropic logo" },
+    openrouter: { src: "/assets/openrouter.svg", alt: "OpenRouter logo" },
+  };
+
+  const resolvedLogo = logoByProvider[providerId] ?? {
+    src: "/assets/openrouter.svg",
+    alt: "Provider logo",
+  };
+
+  return {
+    providerId,
+    logoSrc: resolvedLogo.src,
+    logoAlt: resolvedLogo.alt,
+    logoClass: `is-${providerId}`,
+  };
+}
+
 function quotaWindowPresentation(windowData) {
-  if (isPercentModeWindow(windowData)) {
-    const usedPercent = Math.max(Math.min(Number(windowData.used), 100), 0);
-    const remainingPercent = Math.max(100 - usedPercent, 0);
+  const limit = Number(windowData?.limit);
+  if (!Number.isFinite(limit) || limit <= 0) {
     return {
-      value: `${formatPercentValue(remainingPercent)}`,
-      detail: `${formatPercentValue(usedPercent)} used / 100% limit`,
-      ratio: remainingPercent / 100,
-      resetLabel: formatResetTime(windowData.resetsAt),
-      resetAt: windowData.resetsAt,
+      value: "N/A",
+      detail: "Live usage unavailable",
+      ratio: 0,
+      resetLabel: "No live quota window",
+      resetAt: null,
     };
   }
 
+  const ratio = clampRatio(Number(windowData?.remainingRatio));
+  const remainingPercent = ratio * 100;
+  const usedPercent = 100 - remainingPercent;
+  const resetAt = windowData?.resetsAt ?? null;
+
   return {
-    value: `${formatNumber(windowData.remaining)}`,
-    detail: `${formatNumber(windowData.used)} used / ${formatNumber(windowData.limit)} limit`,
-    ratio: windowData.remainingRatio,
-    resetLabel: formatResetTime(windowData.resetsAt),
-    resetAt: windowData.resetsAt,
+    value: `${formatPercentValue(remainingPercent)}`,
+    detail: `${formatPercentValue(usedPercent)} used / 100% capacity`,
+    ratio,
+    resetLabel: formatResetTime(resetAt),
+    resetAt,
   };
+}
+
+function estimateAccuracyPercent(samples) {
+  if (!Number.isFinite(samples) || samples <= 0) {
+    return 0;
+  }
+
+  return Math.min(95, Math.round((samples / 24) * 100));
+}
+
+function usageEstimateNote(account) {
+  if (!account || account.quotaSyncStatus === "live") {
+    return null;
+  }
+
+  const fiveHourLimit = Number(account?.quota?.fiveHour?.limit ?? 0);
+  const weeklyLimit = Number(account?.quota?.weekly?.limit ?? 0);
+  const samples = Number(account?.estimatedUsageSampleCount ?? 0);
+
+  if (samples <= 0) {
+    if (fiveHourLimit <= 0 || weeklyLimit <= 0) {
+      return "Usage is N/A until the first routed request. Estimation starts on first use.";
+    }
+
+    return null;
+  }
+
+  if (samples === 1) {
+    return "Usage estimate started from the first routed request. Accuracy improves as more requests are routed.";
+  }
+
+  const accuracyPercent = estimateAccuracyPercent(samples);
+  return `Usage is estimated from ${formatNumber(samples)} routed requests (~${accuracyPercent}/100 estimate stability). Accuracy improves with continued use.`;
 }
 
 function updateMetricText(selector, text) {
@@ -770,6 +848,46 @@ function updateMetricText(selector, text) {
   if (element) {
     element.textContent = text;
   }
+}
+
+function aggregateRemainingPercent(accounts, windowKey) {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return 0;
+  }
+
+  let totalRemaining = 0;
+  let totalLimit = 0;
+  let ratioSum = 0;
+  let ratioCount = 0;
+
+  for (const account of accounts) {
+    const windowData = account?.quota?.[windowKey];
+    if (!windowData) {
+      continue;
+    }
+
+    const limit = Number(windowData.limit);
+    const remaining = Number(windowData.remaining);
+    const ratio = clampRatio(Number(windowData.remainingRatio));
+
+    if (Number.isFinite(limit) && limit > 0 && Number.isFinite(remaining)) {
+      totalLimit += limit;
+      totalRemaining += Math.max(Math.min(remaining, limit), 0);
+    }
+
+    ratioSum += ratio;
+    ratioCount += 1;
+  }
+
+  if (totalLimit > 0) {
+    return Math.max(Math.min((totalRemaining / totalLimit) * 100, 100), 0);
+  }
+
+  if (ratioCount === 0) {
+    return 0;
+  }
+
+  return Math.max(Math.min((ratioSum / ratioCount) * 100, 100), 0);
 }
 
 async function request(path, options = {}) {
@@ -789,7 +907,9 @@ async function request(path, options = {}) {
     : await response.text();
 
   if (!response.ok) {
-    const message = typeof payload === "object" && payload?.message ? payload.message : `Request failed (${response.status}).`;
+    const serverMessage =
+      typeof payload === "object" && payload?.message ? payload.message : `Request failed (${response.status}).`;
+    const message = response.status >= 500 ? "Server request failed. Please retry." : serverMessage;
     throw new Error(message);
   }
 
@@ -857,12 +977,20 @@ function renderAccounts(accounts) {
     const weeklyLow = weekly.ratio < 0.2;
     const weeklyCritical = weekly.ratio <= 0.01;
     const accountTitle = maskDisplayName(account.displayName);
+    const providerIdentity = providerIdentityForAccount(account);
     const fiveHourRecharge = formatRechargeLine(fiveHour.resetAt);
     const weeklyRecharge = formatRechargeLine(weekly.resetAt);
     const stateDot = accountStateIndicator(account, fiveHour, weekly);
-    const errorLine = account.quotaSyncStatus !== "live" && account.quotaSyncError
-      ? `<div class="account-error-msg">${escapeHtml(account.quotaSyncError)}</div>`
-      : "";
+    const syncError = typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
+    const showSyncError =
+      account.quotaSyncStatus !== "live" &&
+      syncError.length > 0;
+    const estimateNote = usageEstimateNote(account);
+    const errorLine = showSyncError ? `<div class="account-error-msg">${escapeHtml(syncError)}</div>` : "";
+    const estimateLine =
+      estimateNote && estimateNote.trim().length > 0
+        ? `<div class="account-note-msg">${escapeHtml(estimateNote)}</div>`
+        : "";
 
     return `
       <article class="account-card">
@@ -908,7 +1036,32 @@ function renderAccounts(accounts) {
           </div>
         </div>
 
+        <div class="account-provider-row">
+          <div class="account-provider-left">
+            <span class="account-provider-logo-shell ${escapeHtml(providerIdentity.logoClass)}" aria-hidden="true">
+              <img
+                class="account-provider-logo ${escapeHtml(providerIdentity.logoClass)}"
+                src="${escapeHtml(providerIdentity.logoSrc)}"
+                alt="${escapeHtml(providerIdentity.logoAlt)}"
+                loading="lazy"
+                decoding="async"
+              />
+            </span>
+            <span class="account-provider-id" title="${escapeHtml(providerIdentity.providerId)}">${escapeHtml(providerIdentity.providerId)}</span>
+          </div>
+          <button
+            class="btn btn-icon account-settings-btn"
+            data-open-account-settings="${escapeHtml(account.id)}"
+            type="button"
+            aria-label="Open settings for ${escapeHtml(accountTitle)}"
+            title="Open settings"
+          >
+            <i data-lucide="settings-2"></i>
+          </button>
+        </div>
+
         ${errorLine}
+        ${estimateLine}
       </article>
     `;
   }).join("");
@@ -939,26 +1092,23 @@ function renderDashboard(data) {
 
   setConnectorControlsEnabled(dashboardAuthorized);
 
-  const allPercentMode = data.accounts.length > 0 && data.accounts.every((account) => isPercentModeWindow(account.quota.fiveHour) && isPercentModeWindow(account.quota.weekly));
+  const fiveHourPercent = aggregateRemainingPercent(data.accounts, "fiveHour");
+  const weeklyPercent = aggregateRemainingPercent(data.accounts, "weekly");
+  const fiveHourUsedPercent = data.accounts.length > 0 ? 100 - fiveHourPercent : 0;
+  const weeklyUsedPercent = data.accounts.length > 0 ? 100 - weeklyPercent : 0;
 
-  if (allPercentMode) {
-    const fiveHourAverage = data.accounts.reduce((sum, account) => sum + account.quota.fiveHour.remaining, 0) / data.accounts.length;
-    const weeklyAverage = data.accounts.reduce((sum, account) => sum + account.quota.weekly.remaining, 0) / data.accounts.length;
-
-    updateMetricText("#metric-five-hour", formatPercentValue(fiveHourAverage));
-    updateMetricText("#metric-five-hour-detail", `Average remaining (${formatNumber(data.accounts.length)} accounts)`);
-    updateMetricText("#metric-weekly", formatPercentValue(weeklyAverage));
-    updateMetricText("#metric-weekly-detail", `Average remaining (${formatNumber(data.accounts.length)} accounts)`);
-  } else {
-    updateMetricText("#metric-five-hour", formatNumber(data.totals.fiveHourRemaining));
-    updateMetricText("#metric-five-hour-detail", `${formatNumber(data.totals.fiveHourUsed)} / ${formatNumber(data.totals.fiveHourLimit)} limits`);
-    updateMetricText("#metric-weekly", formatNumber(data.totals.weeklyRemaining));
-    updateMetricText("#metric-weekly-detail", `${formatNumber(data.totals.weeklyUsed)} / ${formatNumber(data.totals.weeklyLimit)} limits`);
-  }
+  updateMetricText("#metric-five-hour", formatPercentValue(fiveHourPercent));
+  updateMetricText(
+    "#metric-five-hour-detail",
+    `${formatPercentValue(fiveHourUsedPercent)} used / 100% capacity`,
+  );
+  updateMetricText("#metric-weekly", formatPercentValue(weeklyPercent));
+  updateMetricText(
+    "#metric-weekly-detail",
+    `${formatPercentValue(weeklyUsedPercent)} used / 100% capacity`,
+  );
 
   updateMetricText("#metric-account-count", formatNumber(data.accounts.length));
-
-  dashboardHasSyncIssues = data.accounts.some((account) => account.quotaSyncStatus !== "live");
 
   renderBestAccountCard(data.bestAccount);
   renderAccounts(data.accounts);
@@ -1030,13 +1180,6 @@ function renderConnectProviderCards() {
           return `<button class="btn btn-outline" type="button" data-connect-oauth-provider="${escapeHtml(provider.id)}" data-connect-oauth-option="${escapeHtml(option.id)}" ${disabled ? "disabled" : ""}>${escapeHtml(option.label)}</button>`;
         })
         .join("");
-      const missingOAuthEnvVars = oauthOptions
-        .map((option) =>
-          option && option.configured !== true && typeof option.requiredClientIdEnv === "string"
-            ? option.requiredClientIdEnv.trim()
-            : "",
-        )
-        .filter((value) => value.length > 0);
       const oauthConfigurationHints = oauthOptions
         .map((option) =>
           option && option.configured !== true && typeof option.configurationHint === "string"
@@ -1044,7 +1187,6 @@ function renderConnectProviderCards() {
             : "",
         )
         .filter((value) => value.length > 0);
-      const uniqueMissingOAuthEnvVars = [...new Set(missingOAuthEnvVars)];
       const uniqueOAuthConfigurationHints = [...new Set(oauthConfigurationHints)];
       const apiButton = provider.supportsApiKey
         ? `<button class="btn btn-secondary" type="button" data-connect-api="${escapeHtml(provider.id)}">API Key</button>`
@@ -1053,15 +1195,13 @@ function renderConnectProviderCards() {
         provider.supportsOAuth && !provider.oauthConfigured
           ? uniqueOAuthConfigurationHints.length > 0
             ? uniqueOAuthConfigurationHints.join(" ")
-            : uniqueMissingOAuthEnvVars.length > 0
-            ? `OAuth not configured. Set ${uniqueMissingOAuthEnvVars.join(", ")} in .env and restart omni-connector.`
-            : "OAuth not configured for this provider."
+            : "OAuth is not configured for this provider."
           : null;
       const note =
         oauthNotConfiguredMessage
           ? `<p class="connect-provider-note">${escapeHtml(oauthNotConfiguredMessage)}</p>`
           : strictLiveQuotaEnabled && !provider.usageConfigured
-            ? '<p class="connect-provider-note">Strict live quota mode: usage adapter not configured.</p>'
+            ? '<p class="connect-provider-note">Strict live quota mode: usage adapter is not configured for this provider.</p>'
             : "";
       const recommendationTag = provider.recommended
         ? '<span class="connect-provider-recommended">recommended</span>'
@@ -1095,6 +1235,7 @@ function renderConnectProviderCards() {
 
 function hideApiLinkForm() {
   selectedApiProviderId = null;
+  apiLinkManualLimitsEnabled = false;
 
   if (connectProviderListElement instanceof HTMLElement) {
     connectProviderListElement.hidden = false;
@@ -1103,6 +1244,40 @@ function hideApiLinkForm() {
   if (apiLinkForm instanceof HTMLFormElement) {
     apiLinkForm.hidden = true;
     apiLinkForm.reset();
+  }
+}
+
+function setApiLinkManualLimitsAvailability(enabled) {
+  apiLinkManualLimitsEnabled = enabled;
+
+  if (apiLinkManualFiveHourLabel instanceof HTMLElement) {
+    apiLinkManualFiveHourLabel.hidden = !enabled;
+  }
+
+  if (apiLinkManualWeeklyLabel instanceof HTMLElement) {
+    apiLinkManualWeeklyLabel.hidden = !enabled;
+  }
+
+  if (apiLinkManualFiveHourInput instanceof HTMLInputElement) {
+    apiLinkManualFiveHourInput.hidden = !enabled;
+    apiLinkManualFiveHourInput.disabled = !enabled;
+    if (!enabled) {
+      apiLinkManualFiveHourInput.value = "";
+    }
+  }
+
+  if (apiLinkManualWeeklyInput instanceof HTMLInputElement) {
+    apiLinkManualWeeklyInput.hidden = !enabled;
+    apiLinkManualWeeklyInput.disabled = !enabled;
+    if (!enabled) {
+      apiLinkManualWeeklyInput.value = "";
+    }
+  }
+
+  if (apiLinkManualNoteElement instanceof HTMLElement) {
+    apiLinkManualNoteElement.textContent = enabled
+      ? "Manual limits are available only as a last resort when live usage sync is unavailable."
+      : "Live usage is configured for this provider. Manual limits are disabled.";
   }
 }
 
@@ -1150,6 +1325,7 @@ function focusConnectModalPrimaryElement() {
 
 function showApiLinkForm(provider) {
   selectedApiProviderId = provider.id;
+  const manualFallbackEnabled = provider.usageConfigured !== true;
 
   if (connectProviderListElement instanceof HTMLElement) {
     connectProviderListElement.hidden = true;
@@ -1182,6 +1358,8 @@ function showApiLinkForm(provider) {
   if (apiLinkManualWeeklyInput instanceof HTMLInputElement) {
     apiLinkManualWeeklyInput.value = "";
   }
+
+  setApiLinkManualLimitsAvailability(manualFallbackEnabled);
 
   if (apiLinkForm instanceof HTMLFormElement) {
     apiLinkForm.hidden = false;
@@ -1216,6 +1394,118 @@ function closeConnectModal() {
     connectModalPreviousFocus.focus();
   }
   connectModalPreviousFocus = null;
+}
+
+function isAccountSettingsModalOpen() {
+  return accountSettingsModalElement instanceof HTMLElement && accountSettingsModalElement.hidden === false;
+}
+
+function findDashboardAccount(accountId) {
+  if (!dashboard || !Array.isArray(dashboard.accounts) || typeof accountId !== "string") {
+    return null;
+  }
+
+  return dashboard.accounts.find((account) => account.id === accountId) ?? null;
+}
+
+function syncStatusLabel(account) {
+  const status = typeof account?.quotaSyncStatus === "string" ? account.quotaSyncStatus : "unknown";
+  const syncError = typeof account?.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
+  if (syncError.length > 0) {
+    return `${status} - ${syncError}`;
+  }
+
+  return status;
+}
+
+function openAccountSettingsModal(accountId) {
+  if (!(accountSettingsModalElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const account = findDashboardAccount(accountId);
+  if (!account) {
+    showToast("Account settings are unavailable.", true);
+    return;
+  }
+
+  selectedAccountSettingsId = account.id;
+  accountSettingsPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  if (accountSettingsProviderElement instanceof HTMLElement) {
+    accountSettingsProviderElement.textContent = `Provider: ${account.provider}`;
+  }
+
+  if (accountSettingsAuthElement instanceof HTMLElement) {
+    accountSettingsAuthElement.textContent = account.authMethod === "api" ? "API key" : "OAuth";
+  }
+
+  if (accountSettingsProviderAccountElement instanceof HTMLElement) {
+    accountSettingsProviderAccountElement.textContent = account.providerAccountId;
+  }
+
+  if (accountSettingsOAuthProfileWrapperElement instanceof HTMLElement) {
+    accountSettingsOAuthProfileWrapperElement.hidden = !account.oauthProfileId;
+  }
+
+  if (accountSettingsOAuthProfileElement instanceof HTMLElement) {
+    accountSettingsOAuthProfileElement.textContent = account.oauthProfileId ?? "N/A";
+  }
+
+  if (accountSettingsSyncStatusElement instanceof HTMLElement) {
+    accountSettingsSyncStatusElement.textContent = syncStatusLabel(account);
+  }
+
+  if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
+    accountSettingsDisplayNameInput.value = account.displayName;
+  }
+
+  const canSetManualFallbackLimits =
+    (account.authMethod ?? "oauth") === "api" && account.quotaSyncStatus !== "live";
+  if (accountSettingsApiLimitsElement instanceof HTMLElement) {
+    accountSettingsApiLimitsElement.hidden = !canSetManualFallbackLimits;
+  }
+
+  if (accountSettingsFiveHourInput instanceof HTMLInputElement) {
+    const currentLimit = Number(account.quota?.fiveHour?.limit ?? Number.NaN);
+    accountSettingsFiveHourInput.value =
+      canSetManualFallbackLimits && Number.isFinite(currentLimit) && currentLimit > 0
+        ? String(Math.round(currentLimit))
+        : "";
+  }
+
+  if (accountSettingsWeeklyInput instanceof HTMLInputElement) {
+    const currentLimit = Number(account.quota?.weekly?.limit ?? Number.NaN);
+    accountSettingsWeeklyInput.value =
+      canSetManualFallbackLimits && Number.isFinite(currentLimit) && currentLimit > 0
+        ? String(Math.round(currentLimit))
+        : "";
+  }
+
+  accountSettingsModalElement.hidden = false;
+  if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
+    accountSettingsDisplayNameInput.focus();
+    accountSettingsDisplayNameInput.select();
+  }
+
+  reRenderIcons();
+}
+
+function closeAccountSettingsModal() {
+  if (!(accountSettingsModalElement instanceof HTMLElement)) {
+    return;
+  }
+
+  accountSettingsModalElement.hidden = true;
+  selectedAccountSettingsId = null;
+  if (accountSettingsForm instanceof HTMLFormElement) {
+    accountSettingsForm.reset();
+  }
+
+  if (accountSettingsPreviousFocus instanceof HTMLElement) {
+    accountSettingsPreviousFocus.focus();
+  }
+  accountSettingsPreviousFocus = null;
 }
 
 function renderConnectProviders(payload) {
@@ -1256,6 +1546,14 @@ function renderConnectProviders(payload) {
                 label: optionLabel,
                 configured: optionConfigured,
                 startPath: optionStartPath,
+                requiredClientIdEnv:
+                  typeof option.requiredClientIdEnv === "string"
+                    ? option.requiredClientIdEnv.trim()
+                    : null,
+                configurationHint:
+                  typeof option.configurationHint === "string"
+                    ? option.configurationHint.trim()
+                    : null,
               };
             })
             .filter((option) => option !== null)
@@ -1595,6 +1893,23 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const accountSettingsButton = targetElement.closest("[data-open-account-settings]");
+  if (accountSettingsButton instanceof HTMLElement) {
+    const accountId = accountSettingsButton.dataset.openAccountSettings;
+    if (!accountId) {
+      showToast("Account settings are unavailable.", true);
+      return;
+    }
+
+    openAccountSettingsModal(accountId);
+    return;
+  }
+
+  if (targetElement.closest("#account-settings-close") || targetElement.closest("#account-settings-cancel") || targetElement.closest("[data-close-account-settings-modal]")) {
+    closeAccountSettingsModal();
+    return;
+  }
+
   const removeButton = targetElement.closest("[data-remove-account]");
   if (removeButton instanceof HTMLElement) {
     const accountId = removeButton.dataset.removeAccount;
@@ -1676,16 +1991,22 @@ if (apiLinkForm instanceof HTMLFormElement) {
     const displayName = String(data.get("displayName") ?? "");
     const providerAccountId = String(data.get("providerAccountId") ?? "");
     const apiKey = String(data.get("apiKey") ?? "");
-    const manualFiveHourLimitValue = Number(data.get("manualFiveHourLimit") ?? "");
-    const manualWeeklyLimitValue = Number(data.get("manualWeeklyLimit") ?? "");
-    const manualFiveHourLimit =
-      Number.isFinite(manualFiveHourLimitValue) && manualFiveHourLimitValue > 0
-        ? Math.round(manualFiveHourLimitValue)
-        : undefined;
-    const manualWeeklyLimit =
-      Number.isFinite(manualWeeklyLimitValue) && manualWeeklyLimitValue > 0
-        ? Math.round(manualWeeklyLimitValue)
-        : undefined;
+    let manualFiveHourLimit;
+    let manualWeeklyLimit;
+
+    if (apiLinkManualLimitsEnabled) {
+      const manualFiveHourLimitValue = Number(data.get("manualFiveHourLimit") ?? "");
+      const manualWeeklyLimitValue = Number(data.get("manualWeeklyLimit") ?? "");
+
+      manualFiveHourLimit =
+        Number.isFinite(manualFiveHourLimitValue) && manualFiveHourLimitValue > 0
+          ? Math.round(manualFiveHourLimitValue)
+          : undefined;
+      manualWeeklyLimit =
+        Number.isFinite(manualWeeklyLimitValue) && manualWeeklyLimitValue > 0
+          ? Math.round(manualWeeklyLimitValue)
+          : undefined;
+    }
 
     try {
       await request("/api/accounts/link-api", {
@@ -1705,6 +2026,68 @@ if (apiLinkForm instanceof HTMLFormElement) {
       await loadDashboard();
     } catch (error) {
       showToast(error.message || "Failed to link API key.", true);
+    }
+  });
+}
+
+if (accountSettingsForm instanceof HTMLFormElement) {
+  accountSettingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (!selectedAccountSettingsId) {
+      showToast("No account selected.", true);
+      return;
+    }
+
+    const account = findDashboardAccount(selectedAccountSettingsId);
+    if (!account) {
+      showToast("Account settings are unavailable.", true);
+      return;
+    }
+
+    const displayName =
+      accountSettingsDisplayNameInput instanceof HTMLInputElement
+        ? accountSettingsDisplayNameInput.value.trim()
+        : "";
+    if (!displayName) {
+      showToast("Display name is required.", true);
+      return;
+    }
+
+    const payload = {
+      displayName,
+    };
+
+    if ((account.authMethod ?? "oauth") === "api") {
+      const fiveHourValue =
+        accountSettingsFiveHourInput instanceof HTMLInputElement
+          ? Number(accountSettingsFiveHourInput.value)
+          : Number.NaN;
+      const weeklyValue =
+        accountSettingsWeeklyInput instanceof HTMLInputElement
+          ? Number(accountSettingsWeeklyInput.value)
+          : Number.NaN;
+
+      if (Number.isFinite(fiveHourValue) && fiveHourValue > 0) {
+        payload.manualFiveHourLimit = Math.round(fiveHourValue);
+      }
+
+      if (Number.isFinite(weeklyValue) && weeklyValue > 0) {
+        payload.manualWeeklyLimit = Math.round(weeklyValue);
+      }
+    }
+
+    try {
+      await request(`/api/accounts/${encodeURIComponent(selectedAccountSettingsId)}/settings`, {
+        method: "POST",
+        body: payload,
+      });
+
+      showToast("Account settings saved.");
+      closeAccountSettingsModal();
+      await loadDashboard();
+    } catch (error) {
+      showToast(error.message || "Failed to save account settings.", true);
     }
   });
 }
@@ -1869,6 +2252,11 @@ window.addEventListener("keydown", (event) => {
   }
 
   if (event.key !== "Escape") {
+    return;
+  }
+
+  if (isAccountSettingsModalOpen()) {
+    closeAccountSettingsModal();
     return;
   }
 

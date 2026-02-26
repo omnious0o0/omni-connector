@@ -22,6 +22,7 @@
         <div class="sidebar-header">
           <div class="logo-box">
             <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <title>omni-connector logo</title>
               <rect x="16" y="16" width="6" height="6" rx="1"></rect>
               <rect x="2" y="16" width="6" height="6" rx="1"></rect>
               <rect x="9" y="2" width="6" height="6" rx="1"></rect>
@@ -366,15 +367,74 @@
           <label for="api-link-key" class="form-label">API key</label>
           <input id="api-link-key" name="apiKey" type="password" class="custom-input" autocomplete="off" required />
 
-          <label for="api-link-manual-5h" class="form-label">Manual 5h limit (fallback)</label>
-          <input id="api-link-manual-5h" name="manualFiveHourLimit" type="number" min="0" class="custom-input" />
+          <label for="api-link-manual-5h" class="form-label">Manual 5h limit (last resort)</label>
+          <input id="api-link-manual-5h" name="manualFiveHourLimit" type="number" min="1" class="custom-input" />
 
-          <label for="api-link-manual-7d" class="form-label">Manual weekly limit (fallback)</label>
-          <input id="api-link-manual-7d" name="manualWeeklyLimit" type="number" min="0" class="custom-input" />
+          <label for="api-link-manual-7d" class="form-label">Manual weekly limit (last resort)</label>
+          <input id="api-link-manual-7d" name="manualWeeklyLimit" type="number" min="1" class="custom-input" />
+
+          <p id="api-link-manual-note" class="connect-provider-note"></p>
 
           <div class="connect-api-actions">
             <button id="api-link-cancel" class="btn btn-outline" type="button">Back</button>
             <button id="api-link-submit" class="btn btn-secondary" type="submit">Link API Key</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div id="account-settings-modal" class="connect-modal account-settings-modal" hidden>
+      <div class="connect-modal-backdrop" data-close-account-settings-modal></div>
+      <section
+        class="connect-modal-panel account-settings-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-settings-title"
+      >
+        <header class="connect-modal-header">
+          <div>
+            <h3 id="account-settings-title">Account Settings</h3>
+            <p id="account-settings-provider">Provider</p>
+          </div>
+          <button id="account-settings-close" class="btn btn-icon" type="button" aria-label="Close account settings dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <form id="account-settings-form" class="account-settings-form">
+          <div class="account-settings-grid" aria-live="polite">
+            <div class="account-settings-meta">
+              <span>Auth Method</span>
+              <strong id="account-settings-auth">N/A</strong>
+            </div>
+            <div class="account-settings-meta">
+              <span>Provider Account ID</span>
+              <strong id="account-settings-provider-account">N/A</strong>
+            </div>
+            <div id="account-settings-oauth-profile-wrapper" class="account-settings-meta" hidden>
+              <span>OAuth Profile</span>
+              <strong id="account-settings-oauth-profile">N/A</strong>
+            </div>
+            <div class="account-settings-meta">
+              <span>Sync Status</span>
+              <strong id="account-settings-sync-status">N/A</strong>
+            </div>
+          </div>
+
+          <label for="account-settings-display-name" class="form-label">Display name</label>
+          <input id="account-settings-display-name" name="displayName" type="text" class="custom-input" maxlength="120" required />
+
+          <div id="account-settings-api-limits" class="account-settings-api-limits" hidden>
+            <label for="account-settings-5h" class="form-label">Manual 5h limit</label>
+            <input id="account-settings-5h" name="manualFiveHourLimit" type="number" min="1" class="custom-input" />
+
+            <label for="account-settings-7d" class="form-label">Manual weekly limit</label>
+            <input id="account-settings-7d" name="manualWeeklyLimit" type="number" min="1" class="custom-input" />
+          </div>
+
+          <div class="account-settings-actions">
+            <button id="account-settings-cancel" class="btn btn-outline" type="button">Cancel</button>
+            <button id="account-settings-save" class="btn btn-secondary" type="submit">Save</button>
           </div>
         </form>
       </section>
