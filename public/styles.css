@@ -1035,7 +1035,10 @@ body.accounts-density-comfortable .account-card {
 
 .connect-provider-warning-anchor {
   display: inline-flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 4px;
 }
 
 .connect-provider-warning-trigger {
@@ -1072,18 +1075,18 @@ body.accounts-density-comfortable .account-card {
 
 .connect-provider-warning-panel {
   display: none;
-  width: 100%;
-  max-width: 100%;
+  width: min(260px, calc(100vw - 96px));
+  max-width: calc(100vw - 96px);
   border: 1px solid var(--tooltip-border);
   background: var(--tooltip-bg);
   color: var(--warn-text);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
   padding: 8px 10px;
-  margin-top: 2px;
+  margin-top: 0;
 }
 
-.connect-provider-card:has(.connect-provider-warning-anchor:hover) .connect-provider-warning-panel,
-.connect-provider-card:has(.connect-provider-warning-anchor:focus-within) .connect-provider-warning-panel {
+.connect-provider-warning-anchor:hover .connect-provider-warning-panel,
+.connect-provider-warning-anchor:focus-within .connect-provider-warning-panel {
   display: block;
 }
 

@@ -1225,16 +1225,12 @@ function renderConnectProviderCards() {
             >
               <i data-lucide="triangle-alert"></i>
             </button>
-          </div>
-        `
-        : "";
-      const warningPanel = warnings.length > 0
-        ? `
-          <div class="connect-provider-warning-panel" role="note" aria-live="polite">
-            <p class="connect-provider-warning-title">Warnings</p>
-            <ul>
-              ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
-            </ul>
+            <div class="connect-provider-warning-panel" role="note" aria-live="polite">
+              <p class="connect-provider-warning-title">Warnings</p>
+              <ul>
+                ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+              </ul>
+            </div>
           </div>
         `
         : "";
@@ -1261,7 +1257,6 @@ function renderConnectProviderCards() {
             ${oauthButtons}
             ${apiButton}
           </div>
-          ${warningPanel}
           ${note}
         </article>
       `;
