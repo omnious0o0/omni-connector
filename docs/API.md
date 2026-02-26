@@ -40,6 +40,22 @@ Headers:
 
 Removes the linked account.
 
+## `POST /api/accounts/:accountId/settings`
+
+Headers:
+
+- `X-Omni-Client: dashboard`
+
+Updates account settings.
+
+Body fields:
+
+- `displayName` (string)
+- `manualFiveHourLimit` (number, optional)
+- `manualWeeklyLimit` (number, optional)
+
+Manual limits are accepted only for API-key accounts and only when live usage sync is unavailable.
+
 ## `POST /api/accounts/link-api`
 
 Headers:
@@ -53,13 +69,18 @@ Body:
   "provider": "gemini",
   "displayName": "Gemini Workspace",
   "providerAccountId": "gemini-primary",
-  "apiKey": "your-api-key",
-  "manualFiveHourLimit": 50000,
-  "manualWeeklyLimit": 500000
+  "apiKey": "your-api-key"
 }
 ```
 
 Links or updates an API-key account for the selected provider.
+
+Optional fields for API-key accounts only:
+
+- `manualFiveHourLimit`
+- `manualWeeklyLimit`
+
+Use manual limits only as a last resort when a provider API-key balance endpoint is unavailable. For OAuth-linked providers with unavailable live usage, the dashboard starts at `N/A` and automatically builds an estimate from routed requests over time.
 
 ## `POST /api/connector/route`
 
@@ -86,4 +107,4 @@ When `STRICT_LIVE_QUOTA=true`, returns `503 strict_live_quota_required` if no ac
 - Provider route: `GET /auth/:provider/start`
 - Profile route: `GET /auth/:provider/start?profile=<profile-id>`
   - Gemini currently exposes `profile=gemini-cli` and `profile=antigravity`
-  - Anthropic currently exposes `profile=claude-code`
+  - Anthropic currently supports API key linking only

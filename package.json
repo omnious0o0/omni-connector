@@ -2,7 +2,7 @@
   "name": "omni-connector",
   "version": "1.0.0",
   "description": "Multi-account OpenAI quota monitor and connector router",
-  "main": "dist/src/server.js",
+  "main": "dist/src/cli.js",
   "bin": {
     "omni-connector": "bin/omni-connector"
   },
@@ -10,6 +10,7 @@
     "bin/omni-connector",
     "dist/**",
     "public/**",
+    "assets/**",
     "scripts/install.sh",
     "scripts/generate-data-encryption-key.mjs",
     "docs/API.md",
@@ -19,7 +20,7 @@
   ],
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "prepare": "npm run build",
     "start": "node dist/src/cli.js",
     "typecheck": "tsc --noEmit",
