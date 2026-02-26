@@ -1206,14 +1206,34 @@ function renderConnectProviderCards() {
       const recommendationTag = provider.recommended
         ? '<span class="connect-provider-recommended">recommended</span>'
         : "";
-      const warningBlock = warnings.length > 0
-        ? `<div class="connect-provider-warning" role="alert">${warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join("")}</div>`
+      const warningTooltip = warnings.length > 0
+        ? `
+          <div class="connect-provider-warning-anchor">
+            <button
+              class="connect-provider-warning-trigger"
+              type="button"
+              aria-label="Warnings for ${escapeHtml(provider.name)}"
+              title="Provider warnings"
+            >
+              <i data-lucide="triangle-alert"></i>
+            </button>
+            <div class="connect-provider-warning-tooltip" role="tooltip">
+              <p class="connect-provider-warning-title">Warnings</p>
+              <ul>
+                ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+              </ul>
+            </div>
+          </div>
+        `
         : "";
 
       return `
         <article class="connect-provider-card">
           <header class="connect-provider-head">
-            <h4>${escapeHtml(provider.name)}</h4>
+            <div class="connect-provider-title">
+              <h4>${escapeHtml(provider.name)}</h4>
+              ${warningTooltip}
+            </div>
             <div class="connect-provider-head-tags">
               <span class="connect-provider-tag">${escapeHtml(provider.id)}</span>
               ${recommendationTag}
@@ -1223,7 +1243,6 @@ function renderConnectProviderCards() {
             ${oauthButtons}
             ${apiButton}
           </div>
-          ${warningBlock}
           ${note}
         </article>
       `;
@@ -1231,6 +1250,7 @@ function renderConnectProviderCards() {
     .join("");
 
   connectProviderListElement.innerHTML = cards;
+  reRenderIcons();
 }
 
 function hideApiLinkForm() {

@@ -23,6 +23,18 @@
   --warn-base: #ef4444;
   --warn-bg: rgba(239, 68, 68, 0.1);
   --warn-border: rgba(239, 68, 68, 0.3);
+  --warn-text: #fecaca;
+
+  --surface-hover-soft: rgba(255, 255, 255, 0.03);
+  --surface-hover-muted: rgba(255, 255, 255, 0.015);
+
+  --tooltip-bg: #161a21;
+  --tooltip-border: rgba(252, 165, 165, 0.38);
+  --tooltip-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+
+  --motion-fast: 0.16s;
+  --motion-base: 0.22s;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
   
   --positive-base: #10b981;
   --positive-bg: rgba(16, 185, 129, 0.1);
@@ -197,13 +209,16 @@ body.resizing-sidebar {
   font-size: 0.84rem;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition:
+    color var(--motion-fast) var(--easing-standard),
+    border-color var(--motion-fast) var(--easing-standard),
+    background-color var(--motion-fast) var(--easing-standard);
 }
 
 .side-tab:hover {
   color: var(--text-main);
   border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-hover-soft);
 }
 
 .side-tab.is-active {
@@ -240,7 +255,12 @@ body.resizing-sidebar {
   font-size: 0.875rem;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition:
+    background-color var(--motion-fast) var(--easing-standard),
+    color var(--motion-fast) var(--easing-standard),
+    border-color var(--motion-fast) var(--easing-standard),
+    box-shadow var(--motion-fast) var(--easing-standard),
+    transform var(--motion-fast) var(--easing-standard);
   border: 1px solid transparent;
   appearance: none;
   outline: none;
@@ -956,7 +976,7 @@ body.accounts-density-comfortable .account-card {
 
 .connect-provider-card {
   border: 1px solid var(--border-light);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-hover-muted);
   padding: 10px;
   display: flex;
   flex-direction: column;
@@ -970,6 +990,13 @@ body.accounts-density-comfortable .account-card {
   align-items: center;
 }
 
+.connect-provider-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .connect-provider-head-tags {
   display: inline-flex;
   align-items: center;
@@ -979,6 +1006,91 @@ body.accounts-density-comfortable .account-card {
 .connect-provider-head h4 {
   font-size: 0.93rem;
   font-weight: 600;
+}
+
+.connect-provider-warning-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.connect-provider-warning-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-radius: var(--radius-sm);
+  cursor: help;
+  padding: 0;
+  transition:
+    background-color var(--motion-fast) var(--easing-standard),
+    border-color var(--motion-fast) var(--easing-standard),
+    color var(--motion-fast) var(--easing-standard),
+    transform var(--motion-fast) var(--easing-standard);
+}
+
+.connect-provider-warning-trigger .lucide {
+  width: 12px;
+  height: 12px;
+}
+
+.connect-provider-warning-trigger:hover,
+.connect-provider-warning-anchor:focus-within .connect-provider-warning-trigger {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: var(--warn-text);
+  transform: translateY(-1px);
+}
+
+.connect-provider-warning-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(320px, calc(100vw - 64px));
+  border: 1px solid var(--tooltip-border);
+  background: var(--tooltip-bg);
+  color: var(--warn-text);
+  box-shadow: var(--tooltip-shadow);
+  padding: 8px 10px;
+  z-index: 15;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity var(--motion-base) var(--easing-standard),
+    transform var(--motion-base) var(--easing-standard);
+}
+
+.connect-provider-warning-anchor:hover .connect-provider-warning-tooltip,
+.connect-provider-warning-anchor:focus-within .connect-provider-warning-tooltip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.connect-provider-warning-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--warn-text);
+  margin-bottom: 5px;
+}
+
+.connect-provider-warning-tooltip ul {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.connect-provider-warning-tooltip li {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--warn-text);
 }
 
 .connect-provider-tag {
@@ -1008,21 +1120,6 @@ body.accounts-density-comfortable .account-card {
 .connect-provider-note {
   font-size: 0.77rem;
   color: var(--text-dim);
-}
-
-.connect-provider-warning {
-  border: 1px solid var(--warn-border);
-  background: var(--warn-bg);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.connect-provider-warning p {
-  margin: 0;
-  font-size: 0.75rem;
-  color: #fca5a5;
 }
 
 .connect-provider-empty {
