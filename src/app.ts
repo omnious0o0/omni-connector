@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import express, { NextFunction, Request, Response } from "express";
 import session from "express-session";
 import helmet from "helmet";
@@ -55,7 +56,7 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
 
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", 1);
+  app.set("trust proxy", config.allowRemoteDashboard ? 1 : false);
 
   app.use(
     helmet({
@@ -85,7 +86,7 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
       cookie: {
         httpOnly: true,
         sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
+        secure: config.allowRemoteDashboard ? "auto" : process.env.NODE_ENV === "production",
         maxAge: 24 * 60 * 60 * 1000,
       },
     }),
@@ -108,6 +109,27 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
     }),
   );
 
+  const assetDirectory = [
+    path.join(config.publicDir, "assets"),
+    path.resolve(config.publicDir, "..", "assets"),
+    path.join(process.cwd(), "assets"),
+  ].find((candidatePath) => {
+    try {
+      return fs.statSync(candidatePath).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
+  if (assetDirectory) {
+    app.use(
+      "/assets",
+      express.static(assetDirectory, {
+        index: false,
+      }),
+    );
+  }
+
   app.use(express.static(config.publicDir, { index: "index.html" }));
 
   app.use((req, res, next) => {
@@ -118,8 +140,10 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
 
     if (
       req.path.startsWith("/api/") ||
+      req.path.startsWith("/assets") ||
       req.path.startsWith("/auth/") ||
-      req.path.startsWith("/oauth/")
+      req.path.startsWith("/oauth/") ||
+      path.extname(req.path).length > 0
     ) {
       next();
       return;
@@ -131,14 +155,20 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (isHttpError(error)) {
       if (req.path.startsWith("/api/")) {
+        const message = error.status >= 500 ? "Unexpected server error." : error.message;
         res.status(error.status).json({
           error: error.code,
-          message: error.message,
+          message,
         });
         return;
       }
 
-      res.status(error.status).type("text/plain").send(error.message);
+      const allowsDetailedServerMessage = error.code === "oauth_not_configured";
+      const message =
+        error.status >= 500 && !allowsDetailedServerMessage
+          ? "Authentication failed. Please retry."
+          : error.message;
+      res.status(error.status).type("text/plain").send(message);
       return;
     }
 

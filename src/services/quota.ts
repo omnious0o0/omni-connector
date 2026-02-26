@@ -82,6 +82,11 @@ export function calculateRoutingScore(account: ConnectedAccount): number {
 }
 
 export function canServeUnits(account: ConnectedAccount, units: number): boolean {
+  const hasUnknownQuotaLimits = account.quota.fiveHour.limit <= 0 || account.quota.weekly.limit <= 0;
+  if (hasUnknownQuotaLimits && (account.quotaSyncStatus ?? "unavailable") !== "live") {
+    return true;
+  }
+
   return (
     remainingQuota(account.quota.fiveHour) >= units &&
     remainingQuota(account.quota.weekly) >= units
@@ -124,6 +129,9 @@ export function toDashboardAccount(account: ConnectedAccount): DashboardAccount 
     quotaSyncedAt: account.quotaSyncedAt ?? null,
     quotaSyncStatus: account.quotaSyncStatus ?? "unavailable",
     quotaSyncError: account.quotaSyncError ?? null,
+    estimatedUsageSampleCount: account.estimatedUsageSampleCount ?? 0,
+    estimatedUsageTotalUnits: account.estimatedUsageTotalUnits ?? 0,
+    estimatedUsageUpdatedAt: account.estimatedUsageUpdatedAt ?? null,
     planType: account.planType ?? null,
     creditsBalance: account.creditsBalance ?? null,
     quota: {

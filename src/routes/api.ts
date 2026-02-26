@@ -4,6 +4,7 @@ import { PROVIDER_CATALOG, isProviderId, providerOAuthProfileDefinitions } from 
 import { ConnectorService } from "../services/connector";
 import { OAuthProviderService } from "../services/oauth-provider";
 import { ProviderUsageService } from "../services/provider-usage";
+import { AccountSettingsUpdatePayload } from "../types";
 
 interface ApiRouterDependencies {
   connectorService: ConnectorService;
@@ -67,13 +68,15 @@ function parseApiLinkBody(rawBody: unknown): {
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   const displayName = typeof body.displayName === "string" ? body.displayName : "";
   const providerAccountId = typeof body.providerAccountId === "string" ? body.providerAccountId : "";
+  const parsedManualFiveHourLimit = Number(body.manualFiveHourLimit);
+  const parsedManualWeeklyLimit = Number(body.manualWeeklyLimit);
   const manualFiveHourLimit =
-    typeof body.manualFiveHourLimit === "number" && Number.isFinite(body.manualFiveHourLimit)
-      ? Math.max(0, Math.round(body.manualFiveHourLimit))
+    Number.isFinite(parsedManualFiveHourLimit) && parsedManualFiveHourLimit > 0
+      ? Math.round(parsedManualFiveHourLimit)
       : undefined;
   const manualWeeklyLimit =
-    typeof body.manualWeeklyLimit === "number" && Number.isFinite(body.manualWeeklyLimit)
-      ? Math.max(0, Math.round(body.manualWeeklyLimit))
+    Number.isFinite(parsedManualWeeklyLimit) && parsedManualWeeklyLimit > 0
+      ? Math.round(parsedManualWeeklyLimit)
       : undefined;
 
   if (!apiKey) {
@@ -85,6 +88,50 @@ function parseApiLinkBody(rawBody: unknown): {
     apiKey,
     displayName,
     providerAccountId,
+    manualFiveHourLimit,
+    manualWeeklyLimit,
+  };
+}
+
+function parseOptionalLimit(rawValue: unknown, fieldName: string): number | undefined {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return undefined;
+  }
+
+  const numericValue = Number(rawValue);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    throw new HttpError(400, "invalid_account_settings", `${fieldName} must be a positive number.`);
+  }
+
+  return Math.round(numericValue);
+}
+
+function parseAccountSettingsBody(rawBody: unknown): AccountSettingsUpdatePayload {
+  const body = (rawBody && typeof rawBody === "object" ? rawBody : {}) as {
+    displayName?: unknown;
+    manualFiveHourLimit?: unknown;
+    manualWeeklyLimit?: unknown;
+  };
+
+  const displayName =
+    body.displayName === undefined
+      ? undefined
+      : typeof body.displayName === "string"
+        ? body.displayName.trim()
+        : null;
+  if (displayName === null) {
+    throw new HttpError(400, "invalid_account_settings", "Display name must be a string.");
+  }
+
+  const manualFiveHourLimit = parseOptionalLimit(body.manualFiveHourLimit, "Manual 5h limit");
+  const manualWeeklyLimit = parseOptionalLimit(body.manualWeeklyLimit, "Manual weekly limit");
+
+  if (displayName === undefined && manualFiveHourLimit === undefined && manualWeeklyLimit === undefined) {
+    throw new HttpError(400, "invalid_account_settings", "At least one account setting must be provided.");
+  }
+
+  return {
+    displayName,
     manualFiveHourLimit,
     manualWeeklyLimit,
   };
@@ -137,15 +184,20 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
         );
         const oauthOptions = oauthProfiles.map((profile) => {
           const envPrefix = profileEnvPrefixById.get(profile.id);
-          const requiredClientIdEnv = envPrefix ? `${envPrefix}_OAUTH_CLIENT_ID` : null;
+          const requiredClientIdEnv =
+            provider.id === "codex" && profile.id === "oauth"
+              ? "OAUTH_CLIENT_ID"
+              : envPrefix
+                ? `${envPrefix}_OAUTH_CLIENT_ID`
+                : null;
           const configurationHint =
             profile.configured || !requiredClientIdEnv
               ? null
               : provider.id === "gemini" && profile.id === "gemini-cli"
-                ? `Install @google/gemini-cli so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+                ? `OAuth not configured. Install @google/gemini-cli for auto-discovery, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
                 : provider.id === "gemini" && profile.id === "antigravity"
-                  ? `Install Antigravity or OpenClaw so credentials are auto-discovered, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
-                : `Set ${requiredClientIdEnv} in .env and restart omni-connector.`;
+                  ? `OAuth not configured. Install Antigravity or OpenClaw for auto-discovery, or set ${requiredClientIdEnv} in .env and restart omni-connector.`
+                : `OAuth not configured. Set ${requiredClientIdEnv} in .env and restart omni-connector.`;
 
           return {
             id: profile.id,
@@ -194,9 +246,34 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
     res.status(204).send();
   });
 
+  router.post("/accounts/:accountId/settings", (req, res) => {
+    assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
+    const accountId = req.params.accountId;
+    if (!accountId) {
+      throw new HttpError(400, "missing_account_id", "Account id is required.");
+    }
+
+    const payload = parseAccountSettingsBody(req.body);
+    dependencies.connectorService.updateAccountSettings(accountId, payload);
+    res.json({
+      ok: true,
+    });
+  });
+
   router.post("/accounts/link-api", (req, res) => {
     assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
     const payload = parseApiLinkBody(req.body);
+
+    const requestedManualLimitFallback =
+      payload.manualFiveHourLimit !== undefined || payload.manualWeeklyLimit !== undefined;
+    if (requestedManualLimitFallback && dependencies.providerUsageService.isConfigured(payload.provider)) {
+      throw new HttpError(
+        409,
+        "manual_limits_not_allowed",
+        "Manual limits can only be set when live usage sync is unavailable.",
+      );
+    }
+
     dependencies.connectorService.linkApiAccount(payload);
     res.status(201).json({
       ok: true,

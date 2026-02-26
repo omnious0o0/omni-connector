@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { HttpError } from "../errors";
 import { DataStore, createConnectorApiKey } from "../store";
 import {
+  AccountSettingsUpdatePayload,
   ApiLinkedAccountPayload,
   ConnectedAccount,
   OAuthLinkedAccountPayload,
@@ -117,6 +118,9 @@ export class AccountRepository {
           payload.quota.fiveHourResetsAt ?? existingAccount.quota.fiveHour.resetsAt ?? null;
         existingAccount.quota.weekly.resetsAt =
           payload.quota.weeklyResetsAt ?? existingAccount.quota.weekly.resetsAt ?? null;
+        existingAccount.estimatedUsageSampleCount = 0;
+        existingAccount.estimatedUsageTotalUnits = 0;
+        existingAccount.estimatedUsageUpdatedAt = null;
         existingAccount.updatedAt = nowIso;
         return;
       }
@@ -137,6 +141,9 @@ export class AccountRepository {
         quotaSyncedAt: payload.quotaSyncedAt ?? null,
         quotaSyncStatus: payload.quotaSyncStatus ?? "unavailable",
         quotaSyncError: payload.quotaSyncError ?? null,
+        estimatedUsageSampleCount: 0,
+        estimatedUsageTotalUnits: 0,
+        estimatedUsageUpdatedAt: null,
         planType: payload.planType ?? null,
         creditsBalance: payload.creditsBalance ?? null,
         quota: {
@@ -280,6 +287,66 @@ export class AccountRepository {
       if (draft.accounts.length === beforeCount) {
         throw new HttpError(404, "account_not_found", "Account could not be found.");
       }
+    });
+  }
+
+  public updateAccountSettings(accountId: string, payload: AccountSettingsUpdatePayload): void {
+    this.store.update((draft) => {
+      const account = draft.accounts.find((candidate) => candidate.id === accountId);
+      if (!account) {
+        throw new HttpError(404, "account_not_found", "Account could not be found.");
+      }
+
+      if (typeof payload.displayName === "string") {
+        const trimmedDisplayName = payload.displayName.trim();
+        if (!trimmedDisplayName) {
+          throw new HttpError(400, "invalid_display_name", "Display name is required.");
+        }
+
+        account.displayName = trimmedDisplayName;
+      }
+
+      const hasManualFiveHourLimit =
+        typeof payload.manualFiveHourLimit === "number" && Number.isFinite(payload.manualFiveHourLimit);
+      const hasManualWeeklyLimit =
+        typeof payload.manualWeeklyLimit === "number" && Number.isFinite(payload.manualWeeklyLimit);
+      const requestedManualLimitChange = hasManualFiveHourLimit || hasManualWeeklyLimit;
+
+      if (requestedManualLimitChange && (account.authMethod ?? "oauth") !== "api") {
+        throw new HttpError(
+          400,
+          "manual_limits_not_supported",
+          "Manual limits are only available for API-key accounts.",
+        );
+      }
+
+      if (requestedManualLimitChange && (account.quotaSyncStatus ?? "unavailable") === "live") {
+        throw new HttpError(
+          409,
+          "manual_limits_not_allowed",
+          "Manual limits can only be changed when live quota sync is unavailable.",
+        );
+      }
+
+      const manualFiveHourLimit = hasManualFiveHourLimit ? payload.manualFiveHourLimit : undefined;
+      const manualWeeklyLimit = hasManualWeeklyLimit ? payload.manualWeeklyLimit : undefined;
+
+      if (manualFiveHourLimit !== undefined) {
+        account.quota.fiveHour.limit = Math.max(1, Math.round(manualFiveHourLimit));
+      }
+
+      if (manualWeeklyLimit !== undefined) {
+        account.quota.weekly.limit = Math.max(1, Math.round(manualWeeklyLimit));
+      }
+
+      if (requestedManualLimitChange) {
+        account.quota.fiveHour.used = Math.min(account.quota.fiveHour.used, account.quota.fiveHour.limit);
+        account.quota.weekly.used = Math.min(account.quota.weekly.used, account.quota.weekly.limit);
+        account.quota.fiveHour.mode = "units";
+        account.quota.weekly.mode = "units";
+      }
+
+      account.updatedAt = new Date().toISOString();
     });
   }
 

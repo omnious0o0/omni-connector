@@ -35,6 +35,9 @@ export interface ConnectedAccount {
   quotaSyncedAt?: string | null;
   quotaSyncStatus?: "live" | "stale" | "unavailable";
   quotaSyncError?: string | null;
+  estimatedUsageSampleCount?: number;
+  estimatedUsageTotalUnits?: number;
+  estimatedUsageUpdatedAt?: string | null;
   planType?: string | null;
   creditsBalance?: string | null;
   quota: AccountQuotaState;
@@ -89,6 +92,12 @@ export interface ApiLinkedAccountPayload {
   manualWeeklyLimit?: number;
 }
 
+export interface AccountSettingsUpdatePayload {
+  displayName?: string;
+  manualFiveHourLimit?: number;
+  manualWeeklyLimit?: number;
+}
+
 export interface DashboardQuotaWindow {
   limit: number;
   used: number;
@@ -111,6 +120,9 @@ export interface DashboardAccount {
   quotaSyncedAt?: string | null;
   quotaSyncStatus?: "live" | "stale" | "unavailable";
   quotaSyncError?: string | null;
+  estimatedUsageSampleCount?: number;
+  estimatedUsageTotalUnits?: number;
+  estimatedUsageUpdatedAt?: string | null;
   planType?: string | null;
   creditsBalance?: string | null;
   quota: {

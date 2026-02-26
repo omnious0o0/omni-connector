@@ -303,13 +303,22 @@ async function startMockOAuthServer(options: MockOAuthServerOptions = {}): Promi
 
 interface MockUsageServerOptions {
   responseDelayMs?: number;
+  failFiveHourStatus?: number;
+  failWeeklyStatus?: number;
 }
 
 async function startMockUsageServer(options: MockUsageServerOptions = {}): Promise<{
   baseUrl: string;
   close: () => Promise<void>;
+  getCounts: () => { fiveHour: number; weekly: number };
 }> {
   const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
+  const failFiveHourStatus = options.failFiveHourStatus ?? null;
+  const failWeeklyStatus = options.failWeeklyStatus ?? null;
+  const requestCounts = {
+    fiveHour: 0,
+    weekly: 0,
+  };
 
   const server = http.createServer(async (request, response) => {
     const method = request.method ?? "GET";
@@ -336,12 +345,26 @@ async function startMockUsageServer(options: MockUsageServerOptions = {}): Promi
     }
 
     if (url.pathname === "/usage/5h") {
+      requestCounts.fiveHour += 1;
+      if (failFiveHourStatus !== null) {
+        response.writeHead(failFiveHourStatus, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "upstream_failure" }));
+        return;
+      }
+
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ used: 18, limit: 1000, plan_type: "enterprise" }));
       return;
     }
 
     if (url.pathname === "/usage/7d") {
+      requestCounts.weekly += 1;
+      if (failWeeklyStatus !== null) {
+        response.writeHead(failWeeklyStatus, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "upstream_failure" }));
+        return;
+      }
+
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ used: 125, limit: 8000, credits_balance: "73" }));
       return;
@@ -362,6 +385,7 @@ async function startMockUsageServer(options: MockUsageServerOptions = {}): Promi
 
   return {
     baseUrl,
+    getCounts: () => ({ ...requestCounts }),
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -424,6 +448,11 @@ test("supports codex OAuth start route alias", async () => {
     const agent = supertest.agent(app);
     await linkOAuthAccount(agent, "/auth/codex/start");
 
+    await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
     const dashboard = await agent
       .get("/api/dashboard")
       .set(DASHBOARD_CLIENT_HEADER)
@@ -433,6 +462,33 @@ test("supports codex OAuth start route alias", async () => {
     assert.equal(dashboard.body.accounts[0]?.provider, "codex");
   } finally {
     await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("returns 404 for missing /assets files instead of SPA fallback HTML", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/assets/does-not-exist.svg")
+      .expect(404)
+      .expect(({ text }) => {
+        assert.match(text, /Cannot GET \/assets\/does-not-exist\.svg/);
+      });
+  } finally {
     temp.cleanup();
   }
 });
@@ -497,7 +553,7 @@ test("accepts callback from earlier OAuth start when multiple starts were initia
   }
 });
 
-test("completes OAuth callback without session cookie when pending state exists", async () => {
+test("rejects OAuth callback without matching session cookie", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer();
 
@@ -534,16 +590,15 @@ test("completes OAuth callback without session cookie when pending state exists"
 
     await supertest(app)
       .get(`${callbackUrl.pathname}${callbackUrl.search}`)
-      .expect(302)
-      .expect("location", "/?connected=1");
+      .expect(400)
+      .expect("OAuth state validation failed.");
 
-    const dashboard = await supertest(app)
+    const dashboard = await startAgent
       .get("/api/dashboard")
       .set(DASHBOARD_CLIENT_HEADER)
       .expect(200);
 
-    assert.equal(dashboard.body.accounts.length, 1);
-    assert.equal(dashboard.body.accounts[0]?.provider, "codex");
+    assert.equal(dashboard.body.accounts.length, 0);
   } finally {
     await mockOAuth.close();
     temp.cleanup();
@@ -646,6 +701,105 @@ test("connects gemini through both OAuth options (Gemini CLI and Antigravity)", 
     assert.match(routeResult.body.authorizationHeader, /^Bearer mock-access-/);
 
     await agent.get("/auth/gemini/start?profile=antigravity").expect(302);
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("estimates Gemini OAuth usage when live usage data is unavailable", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer({ expectedClientId: "gemini-client-id" });
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      oauthProfiles: {
+        ...defaults.oauthProfiles,
+        gemini: [
+          {
+            id: "gemini-cli",
+            label: "Gemini CLI",
+            authorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+            tokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+            userInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+            clientId: "gemini-client-id",
+            clientSecret: "",
+            scopes: ["openid", "profile", "email"],
+            originator: null,
+            extraParams: {},
+          },
+        ],
+      },
+    });
+
+    const agent = supertest.agent(app);
+    await linkOAuthAccount(agent, "/auth/gemini/start?profile=gemini-cli");
+
+    const firstDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const beforeRoute = firstDashboard.body.accounts[0] as {
+      quotaSyncStatus: string;
+      estimatedUsageSampleCount: number;
+      quota: {
+        fiveHour: { limit: number; used: number };
+        weekly: { limit: number; used: number };
+      };
+    };
+    assert.equal(beforeRoute.quotaSyncStatus, "unavailable");
+    assert.equal(beforeRoute.estimatedUsageSampleCount, 0);
+    assert.equal(beforeRoute.quota.fiveHour.limit, 0);
+    assert.equal(beforeRoute.quota.weekly.limit, 0);
+
+    const connectorKey = firstDashboard.body.connector.apiKey as string;
+    await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 2 })
+      .expect(200)
+      .expect(({ body }) => {
+        assert.equal(body.quotaConsumed, true);
+      });
+
+    const secondDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const afterRoute = secondDashboard.body.accounts[0] as {
+      quotaSyncStatus: string;
+      estimatedUsageSampleCount: number;
+      estimatedUsageTotalUnits: number;
+      quota: {
+        fiveHour: { limit: number; used: number };
+        weekly: { limit: number; used: number };
+      };
+    };
+
+    assert.equal(afterRoute.quotaSyncStatus, "stale");
+    assert.equal(afterRoute.estimatedUsageSampleCount, 1);
+    assert.equal(afterRoute.estimatedUsageTotalUnits, 2);
+    assert.equal(afterRoute.quota.fiveHour.limit > 0, true);
+    assert.equal(afterRoute.quota.weekly.limit > 0, true);
+    assert.equal(afterRoute.quota.fiveHour.used, 2);
+    assert.equal(afterRoute.quota.weekly.used, 2);
   } finally {
     await mockOAuth.close();
     temp.cleanup();
@@ -909,6 +1063,7 @@ test("lists providers and links API-key account for non-OAuth provider", async (
       supportsOAuth: boolean;
       supportsApiKey: boolean;
       oauthConfigured: boolean;
+      usageConfigured: boolean;
       recommended?: boolean;
       warnings?: string[];
       oauthOptions?: Array<{
@@ -938,24 +1093,24 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     assert.equal(geminiCliOption?.requiredClientIdEnv, "GEMINI_CLI_OAUTH_CLIENT_ID");
     assert.equal(
       geminiCliOption?.configurationHint,
-      "Install @google/gemini-cli so credentials are auto-discovered, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+      "OAuth not configured. Install @google/gemini-cli for auto-discovery, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
     const geminiAntigravityOption = (geminiProvider?.oauthOptions ?? []).find((option) => option.id === "antigravity");
     assert.equal(geminiAntigravityOption?.requiredClientIdEnv, "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID");
     assert.equal(
       geminiAntigravityOption?.configurationHint,
-      "Install Antigravity or OpenClaw so credentials are auto-discovered, or set GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+      "OAuth not configured. Install Antigravity or OpenClaw for auto-discovery, or set GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
 
     const openRouterProvider = providers.find((provider) => provider.id === "openrouter");
     assert.equal(openRouterProvider?.recommended, true);
 
     const claudeProvider = providers.find((provider) => provider.id === "claude");
-    assert.equal(claudeProvider?.supportsOAuth, true);
-    assert.equal(claudeProvider?.oauthConfigured, true);
+    assert.equal(claudeProvider?.supportsOAuth, false);
+    assert.equal(claudeProvider?.oauthConfigured, false);
+    assert.equal(claudeProvider?.usageConfigured, false);
     assert.equal(claudeProvider?.supportsApiKey, true);
-    const claudeOauthOptionIds = new Set((claudeProvider?.oauthOptions ?? []).map((option) => option.id));
-    assert.equal(claudeOauthOptionIds.has("claude-code"), true);
+    assert.equal((claudeProvider?.oauthOptions ?? []).length, 0);
 
     await agent
       .post("/api/accounts/link-api")
@@ -971,9 +1126,9 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     const geminiStart = await agent.get("/auth/gemini/start").expect(503);
     assert.equal(
       geminiStart.text,
-      "OAuth profile is not configured for gemini/gemini-cli. Install @google/gemini-cli so credentials are auto-discovered, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
+      "OAuth profile is not configured for gemini/gemini-cli. Install @google/gemini-cli for auto-discovery, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
-    await agent.get("/auth/claude/start").expect(302);
+    await agent.get("/auth/claude/start").expect(400);
 
     const dashboard = await agent
       .get("/api/dashboard")
@@ -1014,6 +1169,383 @@ test("lists providers and links API-key account for non-OAuth provider", async (
         process.env[key] = value;
       }
     }
+    temp.cleanup();
+  }
+});
+
+test("updates provider-specific account settings via account settings endpoint", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Original",
+        providerAccountId: "gemini-settings",
+        apiKey: "gem-settings-key",
+        manualFiveHourLimit: 500,
+        manualWeeklyLimit: 5000,
+      })
+      .expect(201);
+
+    const initialDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const account = initialDashboard.body.accounts[0] as {
+      id: string;
+      displayName: string;
+      quota: {
+        fiveHour: { limit: number };
+        weekly: { limit: number };
+      };
+    };
+
+    assert.ok(account?.id);
+    assert.equal(account.displayName, "Gemini Original");
+    assert.equal(account.quota.fiveHour.limit, 500);
+    assert.equal(account.quota.weekly.limit, 5000);
+
+    await agent
+      .post(`/api/accounts/${account.id}/settings`)
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        displayName: "Gemini Tuned",
+        manualFiveHourLimit: 1200,
+        manualWeeklyLimit: 9800,
+      })
+      .expect(200);
+
+    const updatedDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const updatedAccount = updatedDashboard.body.accounts[0] as {
+      displayName: string;
+      quota: {
+        fiveHour: { limit: number };
+        weekly: { limit: number };
+      };
+    };
+
+    assert.equal(updatedAccount.displayName, "Gemini Tuned");
+    assert.equal(updatedAccount.quota.fiveHour.limit, 1200);
+    assert.equal(updatedAccount.quota.weekly.limit, 9800);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("rejects manual limits on API link when live usage adapter is configured", async () => {
+  const temp = createTempDataPath();
+  const mockUsage = await startMockUsageServer();
+
+  try {
+    const providerUsage = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    }).providerUsage;
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...providerUsage,
+        gemini: {
+          ...providerUsage.gemini,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: `${mockUsage.baseUrl}/usage/5h`,
+          weeklyUrl: `${mockUsage.baseUrl}/usage/7d`,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini With Manual",
+        providerAccountId: "gemini-live-manual",
+        apiKey: "gem-live-key",
+        manualFiveHourLimit: 400,
+        manualWeeklyLimit: 5000,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        assert.equal(body.error, "manual_limits_not_allowed");
+      });
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Without Manual",
+        providerAccountId: "gemini-live-default",
+        apiKey: "gem-live-key",
+      })
+      .expect(201);
+  } finally {
+    await mockUsage.close();
+    temp.cleanup();
+  }
+});
+
+test("blocks manual limit edits for live-synced accounts but allows display-name updates", async () => {
+  const temp = createTempDataPath();
+  const now = new Date().toISOString();
+  const seededStore = {
+    connector: {
+      apiKey: "cxk_seeded_test_key",
+      createdAt: now,
+      lastRotatedAt: now,
+    },
+    accounts: [
+      {
+        id: "acc_live_api",
+        provider: "openrouter",
+        authMethod: "api",
+        providerAccountId: "openrouter-live",
+        chatgptAccountId: null,
+        displayName: "OpenRouter Live",
+        accessToken: "openrouter-live-token",
+        refreshToken: null,
+        tokenExpiresAt: "2999-01-01T00:00:00.000Z",
+        createdAt: now,
+        updatedAt: now,
+        quotaSyncedAt: now,
+        quotaSyncStatus: "live",
+        quotaSyncError: null,
+        planType: null,
+        creditsBalance: null,
+        quota: {
+          fiveHour: {
+            limit: 700,
+            used: 120,
+            mode: "units",
+            windowStartedAt: now,
+            resetsAt: null,
+          },
+          weekly: {
+            limit: 7000,
+            used: 900,
+            mode: "units",
+            windowStartedAt: now,
+            resetsAt: null,
+          },
+        },
+      },
+    ],
+  };
+
+  fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await agent
+      .post("/api/accounts/acc_live_api/settings")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        manualFiveHourLimit: 900,
+      })
+      .expect(409)
+      .expect(({ body }) => {
+        assert.equal(body.error, "manual_limits_not_allowed");
+      });
+
+    await agent
+      .post("/api/accounts/acc_live_api/settings")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        displayName: "OpenRouter Renamed",
+      })
+      .expect(200);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const account = dashboard.body.accounts[0] as {
+      displayName: string;
+      quota: {
+        fiveHour: { limit: number };
+        weekly: { limit: number };
+      };
+    };
+    assert.equal(account.displayName, "OpenRouter Renamed");
+    assert.equal(account.quota.fiveHour.limit, 700);
+    assert.equal(account.quota.weekly.limit, 7000);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("clears legacy Gemini OAuth placeholder limits when usage adapter is not configured", async () => {
+  const temp = createTempDataPath();
+  const now = new Date().toISOString();
+  const seededStore = {
+    connector: {
+      apiKey: "cxk_seeded_test_key",
+      createdAt: now,
+      lastRotatedAt: now,
+    },
+    accounts: [
+      {
+        id: "acc_gemini_legacy_placeholder",
+        provider: "gemini",
+        authMethod: "oauth",
+        oauthProfileId: "gemini-cli",
+        providerAccountId: "gemini-project-legacy",
+        chatgptAccountId: null,
+        displayName: "Gemini Legacy",
+        accessToken: "legacy-gemini-token",
+        refreshToken: null,
+        tokenExpiresAt: "2999-01-01T00:00:00.000Z",
+        createdAt: now,
+        updatedAt: now,
+        quotaSyncedAt: now,
+        quotaSyncStatus: "stale",
+        quotaSyncError: null,
+        planType: null,
+        creditsBalance: null,
+        quota: {
+          fiveHour: {
+            limit: 50_000,
+            used: 0,
+            mode: "units",
+            windowStartedAt: now,
+            resetsAt: null,
+          },
+          weekly: {
+            limit: 500_000,
+            used: 0,
+            mode: "units",
+            windowStartedAt: now,
+            resetsAt: null,
+          },
+        },
+      },
+    ],
+  };
+
+  fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const account = dashboard.body.accounts[0] as {
+      quotaSyncStatus: string;
+      quotaSyncError: string | null;
+      estimatedUsageSampleCount: number;
+      estimatedUsageTotalUnits: number;
+      quota: {
+        fiveHour: { limit: number; used: number };
+        weekly: { limit: number; used: number };
+      };
+    };
+
+    assert.equal(account.quotaSyncStatus, "unavailable");
+    assert.equal(account.quotaSyncError, null);
+    assert.equal(account.estimatedUsageSampleCount, 0);
+    assert.equal(account.estimatedUsageTotalUnits, 0);
+    assert.equal(account.quota.fiveHour.limit, 0);
+    assert.equal(account.quota.fiveHour.used, 0);
+    assert.equal(account.quota.weekly.limit, 0);
+    assert.equal(account.quota.weekly.used, 0);
+
+    await agent
+      .post("/api/connector/route")
+      .set("Authorization", "Bearer cxk_seeded_test_key")
+      .send({ units: 1 })
+      .expect(200)
+      .expect(({ body }) => {
+        assert.equal(body.quotaConsumed, true);
+      });
+
+    const estimatedDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const estimatedAccount = estimatedDashboard.body.accounts[0] as {
+      quotaSyncStatus: string;
+      estimatedUsageSampleCount: number;
+      estimatedUsageTotalUnits: number;
+      quota: {
+        fiveHour: { limit: number; used: number };
+        weekly: { limit: number; used: number };
+      };
+    };
+
+    assert.equal(estimatedAccount.quotaSyncStatus, "stale");
+    assert.equal(estimatedAccount.estimatedUsageSampleCount, 1);
+    assert.equal(estimatedAccount.estimatedUsageTotalUnits, 1);
+    assert.equal(estimatedAccount.quota.fiveHour.limit > 0, true);
+    assert.equal(estimatedAccount.quota.weekly.limit > 0, true);
+    assert.equal(estimatedAccount.quota.fiveHour.used, 1);
+    assert.equal(estimatedAccount.quota.weekly.used, 1);
+  } finally {
     temp.cleanup();
   }
 });
@@ -1176,6 +1708,153 @@ test("routes in strict live mode when provider usage adapter is configured", asy
 
     assert.equal(route.body.routedTo.provider, "gemini");
     assert.equal(route.body.quotaConsumed, false);
+  } finally {
+    await mockUsage.close();
+    temp.cleanup();
+  }
+});
+
+test("marks partial provider usage sync as stale in strict live mode", async () => {
+  const temp = createTempDataPath();
+  const mockUsage = await startMockUsageServer({ failFiveHourStatus: 500 });
+
+  try {
+    const providerUsage = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    }).providerUsage;
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: true,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...providerUsage,
+        gemini: {
+          ...providerUsage.gemini,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: `${mockUsage.baseUrl}/usage/5h`,
+          weeklyUrl: `${mockUsage.baseUrl}/usage/7d`,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Partial",
+        providerAccountId: "gemini-partial",
+        apiKey: "gem-live-key",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboard.body.accounts[0]?.quotaSyncStatus, "stale");
+    assert.match(String(dashboard.body.accounts[0]?.quotaSyncError ?? ""), /5h usage fetch failed/i);
+
+    const connectorKey = dashboard.body.connector.apiKey as string;
+    const route = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 1 })
+      .expect(503);
+
+    assert.equal(route.body.error, "strict_live_quota_required");
+  } finally {
+    await mockUsage.close();
+    temp.cleanup();
+  }
+});
+
+test("applies strict live sync cooldown after provider usage failure", async () => {
+  const temp = createTempDataPath();
+  const mockUsage = await startMockUsageServer({ failFiveHourStatus: 500, failWeeklyStatus: 500 });
+
+  try {
+    const providerUsage = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    }).providerUsage;
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: true,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...providerUsage,
+        gemini: {
+          ...providerUsage.gemini,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: `${mockUsage.baseUrl}/usage/5h`,
+          weeklyUrl: `${mockUsage.baseUrl}/usage/7d`,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Cooldown",
+        providerAccountId: "gemini-cooldown",
+        apiKey: "gem-live-key",
+      })
+      .expect(201);
+
+    const firstDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    assert.equal(firstDashboard.body.accounts[0]?.quotaSyncStatus, "unavailable");
+
+    const countsAfterFirst = mockUsage.getCounts();
+
+    await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const countsAfterSecond = mockUsage.getCounts();
+    assert.deepEqual(countsAfterSecond, countsAfterFirst);
   } finally {
     await mockUsage.close();
     temp.cleanup();

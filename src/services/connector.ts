@@ -1,5 +1,6 @@
 import { HttpError } from "../errors";
 import {
+  AccountSettingsUpdatePayload,
   ApiLinkedAccountPayload,
   ConnectedAccount,
   DashboardAccount,
@@ -48,6 +49,101 @@ function sortDashboardAccounts(accounts: DashboardAccount[]): DashboardAccount[]
 }
 
 const DASHBOARD_SYNC_WAIT_BUDGET_MS = 350;
+const STRICT_LIVE_RETRY_COOLDOWN_MS = 25_000;
+const LEGACY_GEMINI_PLACEHOLDER_FIVE_HOUR_LIMIT = 50_000;
+const LEGACY_GEMINI_PLACEHOLDER_WEEKLY_LIMIT = 500_000;
+const ESTIMATED_FIVE_HOUR_MIN_LIMIT = 120;
+const ESTIMATED_WEEKLY_MIN_LIMIT = 1_200;
+const ESTIMATE_INITIAL_MULTIPLIER = 24;
+const ESTIMATE_SMOOTHING_ALPHA = 0.25;
+
+function redactSensitiveLogText(input: string): string {
+  return input
+    .replace(
+      /([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]");
+}
+
+function syncErrorDetail(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return redactSensitiveLogText(error.message);
+  }
+
+  return redactSensitiveLogText(fallback);
+}
+
+function isLegacyGeminiPlaceholderQuota(account: ConnectedAccount): boolean {
+  if (account.provider !== "gemini" || (account.authMethod ?? "oauth") !== "oauth") {
+    return false;
+  }
+
+  return (
+    account.quota.fiveHour.limit === LEGACY_GEMINI_PLACEHOLDER_FIVE_HOUR_LIMIT &&
+    account.quota.weekly.limit === LEGACY_GEMINI_PLACEHOLDER_WEEKLY_LIMIT &&
+    account.quota.fiveHour.used === 0 &&
+    account.quota.weekly.used === 0
+  );
+}
+
+function hasUnknownQuotaLimits(account: ConnectedAccount): boolean {
+  return account.quota.fiveHour.limit <= 0 || account.quota.weekly.limit <= 0;
+}
+
+function applyEstimatedUsage(account: ConnectedAccount, units: number, nowIso: string): void {
+  const nextSamples = Math.max(0, account.estimatedUsageSampleCount ?? 0) + 1;
+  const nextTotalUnits = Math.max(0, account.estimatedUsageTotalUnits ?? 0) + units;
+  const averageUnitsPerRequest = nextTotalUnits / nextSamples;
+
+  const nextFiveHourUsed = account.quota.fiveHour.used + units;
+  const nextWeeklyUsed = account.quota.weekly.used + units;
+
+  const bootstrapFiveHourLimit = Math.max(ESTIMATED_FIVE_HOUR_MIN_LIMIT, units * ESTIMATE_INITIAL_MULTIPLIER);
+  const bootstrapWeeklyLimit = Math.max(ESTIMATED_WEEKLY_MIN_LIMIT, bootstrapFiveHourLimit * 10);
+
+  const projectedFiveHourLimit = Math.max(
+    bootstrapFiveHourLimit,
+    nextFiveHourUsed * 2,
+    Math.ceil(averageUnitsPerRequest * Math.min(8 + nextSamples, 36)),
+  );
+  const projectedWeeklyLimit = Math.max(
+    bootstrapWeeklyLimit,
+    nextWeeklyUsed * 2,
+    Math.ceil(projectedFiveHourLimit * 10),
+  );
+
+  const previousFiveHourLimit = account.quota.fiveHour.limit > 0 ? account.quota.fiveHour.limit : bootstrapFiveHourLimit;
+  const previousWeeklyLimit = account.quota.weekly.limit > 0 ? account.quota.weekly.limit : bootstrapWeeklyLimit;
+
+  const alpha = nextSamples === 1 ? 1 : nextSamples < 6 ? 0.5 : ESTIMATE_SMOOTHING_ALPHA;
+  const estimatedFiveHourLimit = Math.max(
+    nextFiveHourUsed,
+    Math.round(previousFiveHourLimit * (1 - alpha) + projectedFiveHourLimit * alpha),
+  );
+  const estimatedWeeklyLimit = Math.max(
+    nextWeeklyUsed,
+    Math.round(previousWeeklyLimit * (1 - alpha) + projectedWeeklyLimit * alpha),
+  );
+
+  account.quota.fiveHour.limit = estimatedFiveHourLimit;
+  account.quota.fiveHour.used = Math.min(nextFiveHourUsed, estimatedFiveHourLimit);
+  account.quota.fiveHour.mode = "units";
+  account.quota.fiveHour.windowStartedAt = account.quota.fiveHour.windowStartedAt || nowIso;
+  account.quota.fiveHour.resetsAt = null;
+
+  account.quota.weekly.limit = estimatedWeeklyLimit;
+  account.quota.weekly.used = Math.min(nextWeeklyUsed, estimatedWeeklyLimit);
+  account.quota.weekly.mode = "units";
+  account.quota.weekly.windowStartedAt = account.quota.weekly.windowStartedAt || nowIso;
+  account.quota.weekly.resetsAt = null;
+
+  account.estimatedUsageSampleCount = nextSamples;
+  account.estimatedUsageTotalUnits = nextTotalUnits;
+  account.estimatedUsageUpdatedAt = nowIso;
+  account.quotaSyncStatus = "stale";
+  account.quotaSyncError = null;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -97,6 +193,10 @@ export class ConnectorService {
 
   public removeAccount(accountId: string): void {
     this.accounts.removeAccount(accountId);
+  }
+
+  public updateAccountSettings(accountId: string, payload: AccountSettingsUpdatePayload): void {
+    this.accounts.updateAccountSettings(accountId, payload);
   }
 
   public rotateConnectorApiKey(): string {
@@ -152,9 +252,15 @@ export class ConnectorService {
 
       let quotaConsumed = false;
       if (!this.strictLiveQuota && selected.quotaSyncStatus !== "live") {
-        selected.quota.fiveHour.used += safeUnits;
-        selected.quota.weekly.used += safeUnits;
-        selected.updatedAt = new Date().toISOString();
+        const nowIso = new Date().toISOString();
+        if (hasUnknownQuotaLimits(selected)) {
+          applyEstimatedUsage(selected, safeUnits, nowIso);
+        } else {
+          selected.quota.fiveHour.used += safeUnits;
+          selected.quota.weekly.used += safeUnits;
+        }
+
+        selected.updatedAt = nowIso;
         quotaConsumed = true;
       }
 
@@ -205,7 +311,9 @@ export class ConnectorService {
     }
 
     this.syncInFlight = this.executeAccountSync()
-      .catch(() => {
+      .catch((error) => {
+        const message = syncErrorDetail(error, "unexpected sync failure");
+        process.stderr.write(`Account sync failed: ${message}\n`);
         return;
       })
       .finally(() => {
@@ -216,8 +324,24 @@ export class ConnectorService {
   }
 
   private shouldSyncQuota(account: ConnectedAccount): boolean {
-    if (this.strictLiveQuota && (account.quotaSyncStatus ?? "unavailable") !== "live") {
+    if (isLegacyGeminiPlaceholderQuota(account)) {
       return true;
+    }
+
+    if (this.strictLiveQuota && (account.quotaSyncStatus ?? "unavailable") !== "live") {
+      const syncError = account.quotaSyncError ?? null;
+
+      if (syncError === null) {
+        return true;
+      }
+
+      const syncedAtMs = account.quotaSyncedAt ? Date.parse(account.quotaSyncedAt) : Number.NaN;
+      if (Number.isNaN(syncedAtMs)) {
+        return true;
+      }
+
+      const ageMs = Date.now() - syncedAtMs;
+      return ageMs >= STRICT_LIVE_RETRY_COOLDOWN_MS;
     }
 
     const syncedAtMs = account.quotaSyncedAt ? Date.parse(account.quotaSyncedAt) : Number.NaN;
@@ -259,7 +383,10 @@ export class ConnectorService {
           target.refreshToken = refreshedToken.refreshToken ?? target.refreshToken;
           target.tokenExpiresAt = refreshedToken.tokenExpiresAt;
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Failed to refresh access token.";
+          const detail = syncErrorDetail(error, "unknown token refresh failure");
+          const message = "Failed to refresh access token.";
+          process.stderr.write(`Access token refresh failed for account ${target.id}: ${detail}\n`);
+          const nowIso = new Date().toISOString();
           this.accounts.update((draft) => {
             const account = draft.accounts.find((candidate) => candidate.id === target.id);
             if (!account) {
@@ -269,7 +396,8 @@ export class ConnectorService {
             account.quotaSyncStatus =
               this.strictLiveQuota || account.quota.fiveHour.limit <= 0 ? "unavailable" : "stale";
             account.quotaSyncError = message;
-            account.updatedAt = new Date().toISOString();
+            account.quotaSyncedAt = nowIso;
+            account.updatedAt = nowIso;
           });
         }
       }
@@ -289,9 +417,32 @@ export class ConnectorService {
             return;
           }
 
+          const clearLegacyPlaceholderQuota = isLegacyGeminiPlaceholderQuota(account);
+          if (clearLegacyPlaceholderQuota) {
+            account.quota.fiveHour.limit = 0;
+            account.quota.fiveHour.used = 0;
+            account.quota.fiveHour.mode = "units";
+            account.quota.fiveHour.windowStartedAt = nowIso;
+            account.quota.fiveHour.resetsAt = null;
+
+            account.quota.weekly.limit = 0;
+            account.quota.weekly.used = 0;
+            account.quota.weekly.mode = "units";
+            account.quota.weekly.windowStartedAt = nowIso;
+            account.quota.weekly.resetsAt = null;
+
+            account.estimatedUsageSampleCount = 0;
+            account.estimatedUsageTotalUnits = 0;
+            account.estimatedUsageUpdatedAt = null;
+            account.quotaSyncStatus = "unavailable";
+            account.quotaSyncError = null;
+            account.quotaSyncedAt = nowIso;
+            account.updatedAt = nowIso;
+            return;
+          }
+
           account.quotaSyncStatus = this.strictLiveQuota ? "unavailable" : "stale";
-          account.quotaSyncError =
-            "Live usage adapter is not configured for this account. Configure provider usage endpoint and credentials.";
+          account.quotaSyncError = null;
           account.quotaSyncedAt = nowIso;
           account.updatedAt = nowIso;
         });
@@ -345,12 +496,15 @@ export class ConnectorService {
           account.planType = liveQuota.planType;
           account.creditsBalance = liveQuota.creditsBalance;
           account.quotaSyncedAt = liveQuota.syncedAt;
-          account.quotaSyncStatus = "live";
-          account.quotaSyncError = null;
+          account.quotaSyncStatus = liveQuota.partial ? "stale" : "live";
+          account.quotaSyncError = liveQuota.syncError;
           account.updatedAt = nowIso;
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to sync live quota.";
+        const detail = syncErrorDetail(error, "unknown live quota sync failure");
+        const message = "Failed to sync live quota.";
+        process.stderr.write(`Live quota sync failed for account ${target.id}: ${detail}\n`);
+        const nowIso = new Date().toISOString();
         this.accounts.update((draft) => {
           const account = draft.accounts.find((candidate) => candidate.id === target.id);
           if (!account) {
@@ -360,7 +514,8 @@ export class ConnectorService {
           account.quotaSyncStatus =
             this.strictLiveQuota || account.quota.fiveHour.limit <= 0 ? "unavailable" : "stale";
           account.quotaSyncError = message;
-          account.updatedAt = new Date().toISOString();
+          account.quotaSyncedAt = nowIso;
+          account.updatedAt = nowIso;
         });
       }
     }
