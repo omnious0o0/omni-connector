@@ -65,6 +65,15 @@
             </button>
           </div>
 
+          <section id="sidebar-models-panel" class="sidebar-models-panel" aria-live="polite">
+            <header class="sidebar-models-header">
+              <h2>Models</h2>
+            </header>
+            <div id="sidebar-models-content" class="sidebar-models-content">
+              <p class="sidebar-models-empty">Loading connected models...</p>
+            </div>
+          </section>
+
           <div class="nav-actions">
             <button id="connect-trigger" class="btn btn-primary" type="button">
               <i data-lucide="plus"></i> Connect
@@ -187,18 +196,35 @@
                   <p id="key-access-note" class="key-note">Loading connector actions...</p>
                 </div>
 
-                <form id="route-test-form" class="router-form">
-                  <label for="route-units" class="form-label">Test Routing (Units)</label>
+                <form id="routing-priority-form" class="router-form">
+                  <label for="routing-preferred-provider" class="form-label">Preferred provider</label>
+                  <select id="routing-preferred-provider" name="preferredProvider" class="custom-input">
+                    <option value="auto">Auto (best available)</option>
+                  </select>
+
+                  <label for="routing-priority-models" class="form-label">Priority models</label>
+                  <textarea
+                    id="routing-priority-models"
+                    name="priorityModels"
+                    class="custom-input custom-textarea"
+                    rows="4"
+                    placeholder="auto"
+                  ></textarea>
+                  <p class="form-note">One model per line (for example: <code>auto</code>, <code>openrouter/gpt-4o-mini</code>).</p>
+
+                  <fieldset class="fallback-fieldset">
+                    <legend class="form-label">Fallback providers</legend>
+                    <div id="routing-fallback-providers" class="fallback-providers"></div>
+                  </fieldset>
+
                   <div class="form-group">
-                    <input id="route-units" name="units" type="number" min="1" max="1000" value="1" required class="custom-input" />
-                    <button type="submit" class="btn btn-secondary">
-                      Test Route
-                    </button>
+                    <button type="submit" class="btn btn-secondary">Save Priority</button>
+                    <button id="routing-priority-reset" type="button" class="btn btn-outline">Reset to Auto</button>
                   </div>
                 </form>
 
                 <div class="console-output">
-                  <pre id="route-result" class="console-body" aria-live="polite">Ready for routing simulation.</pre>
+                  <pre id="routing-priority-result" class="console-body" aria-live="polite">Priority routing settings ready.</pre>
                 </div>
               </div>
             </section>

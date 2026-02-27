@@ -23,10 +23,13 @@ const rememberPageTabInput = document.querySelector("#settings-remember-page-tab
 const keyAccessNote = document.querySelector("#key-access-note");
 const connectorKeyElement = document.querySelector("#connector-key");
 const accountsListElement = document.querySelector("#accounts-list");
-const routeResultElement = document.querySelector("#route-result");
-const routeForm = document.querySelector("#route-test-form");
-const routeUnitsInput = document.querySelector("#route-units");
-const routeSubmitButton = document.querySelector("#route-test-form button[type='submit']");
+const sidebarModelsContentElement = document.querySelector("#sidebar-models-content");
+const routingPriorityResultElement = document.querySelector("#routing-priority-result");
+const routingPriorityForm = document.querySelector("#routing-priority-form");
+const routingPreferredProviderInput = document.querySelector("#routing-preferred-provider");
+const routingPriorityModelsInput = document.querySelector("#routing-priority-models");
+const routingFallbackProvidersElement = document.querySelector("#routing-fallback-providers");
+const routingPriorityResetButton = document.querySelector("#routing-priority-reset");
 const rotateKeyButton = document.querySelector("#rotate-key");
 const copyKeyButton = document.querySelector("#copy-key");
 const keyVisibilityButton = document.querySelector("#toggle-key-visibility");
@@ -81,7 +84,7 @@ let resizingStartX = 0;
 let resizingStartWidth = 0;
 let autoRefreshTimer = null;
 let autoRefreshInFlight = false;
-let lastRoutePayload = null;
+let lastRoutingPreferencesPayload = null;
 let clockTimer = null;
 let providerConfigured = null;
 let dashboardLoaded = false;
@@ -95,6 +98,10 @@ let selectedAccountSettingsId = null;
 let strictLiveQuotaEnabled = false;
 let connectWarningTooltipElement = null;
 let activeWarningTrigger = null;
+let connectedProviderModelsPayload = {
+  providers: [],
+};
+let connectedProviderModelsError = null;
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -123,6 +130,7 @@ const LEGACY_STORAGE_KEYS = Object.freeze(
 );
 
 const AUTO_REFRESH_INTERVAL_MS = 30_000;
+const KNOWN_PROVIDER_IDS = ["codex", "gemini", "claude", "openrouter"];
 
 if (window.lucide) {
   lucide.createIcons();
@@ -534,18 +542,35 @@ function setConnectorControlsEnabled(enabled) {
     rotateKeyButton.setAttribute("aria-disabled", enabled ? "false" : "true");
   }
 
-  if (routeUnitsInput instanceof HTMLInputElement) {
-    routeUnitsInput.disabled = !enabled;
-    routeUnitsInput.setAttribute("aria-disabled", enabled ? "false" : "true");
+  if (routingPreferredProviderInput instanceof HTMLSelectElement) {
+    routingPreferredProviderInput.disabled = !enabled;
+    routingPreferredProviderInput.setAttribute("aria-disabled", enabled ? "false" : "true");
   }
 
-  if (routeSubmitButton instanceof HTMLButtonElement) {
-    routeSubmitButton.disabled = !enabled;
-    routeSubmitButton.setAttribute("aria-disabled", enabled ? "false" : "true");
+  if (routingPriorityModelsInput instanceof HTMLTextAreaElement) {
+    routingPriorityModelsInput.disabled = !enabled;
+    routingPriorityModelsInput.setAttribute("aria-disabled", enabled ? "false" : "true");
   }
 
-  if (routeForm instanceof HTMLFormElement) {
-    routeForm.setAttribute("aria-disabled", enabled ? "false" : "true");
+  if (routingPriorityResetButton instanceof HTMLButtonElement) {
+    routingPriorityResetButton.disabled = !enabled;
+    routingPriorityResetButton.setAttribute("aria-disabled", enabled ? "false" : "true");
+  }
+
+  if (routingPriorityForm instanceof HTMLFormElement) {
+    routingPriorityForm.setAttribute("aria-disabled", enabled ? "false" : "true");
+  }
+
+  if (routingFallbackProvidersElement instanceof HTMLElement) {
+    const fallbackInputs = routingFallbackProvidersElement.querySelectorAll('input[type="checkbox"]');
+    for (const input of fallbackInputs) {
+      if (!(input instanceof HTMLInputElement)) {
+        continue;
+      }
+
+      input.disabled = !enabled;
+      input.setAttribute("aria-disabled", enabled ? "false" : "true");
+    }
   }
 
   if (keyAccessNote instanceof HTMLElement) {
@@ -1214,6 +1239,112 @@ function renderConnectorKey(keyValue) {
   connectorKeyElement.classList.toggle("masked", !shouldRevealConnectorKey());
 }
 
+function normalizeConnectedProviderModelsPayload(payload) {
+  const providersRaw = Array.isArray(payload?.providers) ? payload.providers : [];
+  const providers = providersRaw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const provider = normalizeProviderId(entry.provider);
+      if (!provider) {
+        return null;
+      }
+
+      const modelIds = Array.isArray(entry.modelIds)
+        ? entry.modelIds
+            .filter((modelId) => typeof modelId === "string")
+            .map((modelId) => modelId.trim())
+            .filter((modelId) => modelId.length > 0)
+        : [];
+
+      const uniqueModelIds = [...new Set(modelIds)].sort((left, right) => left.localeCompare(right));
+      const accountCount = Number(entry.accountCount);
+      const status = entry.status === "live" ? "live" : "unavailable";
+      const syncError =
+        typeof entry.syncError === "string" && entry.syncError.trim().length > 0
+          ? entry.syncError.trim()
+          : null;
+
+      return {
+        provider,
+        accountCount: Number.isFinite(accountCount) && accountCount > 0 ? Math.round(accountCount) : 0,
+        status,
+        modelIds: uniqueModelIds,
+        syncError,
+      };
+    })
+    .filter((entry) => entry !== null)
+    .sort((left, right) => KNOWN_PROVIDER_IDS.indexOf(left.provider) - KNOWN_PROVIDER_IDS.indexOf(right.provider));
+
+  return {
+    providers,
+  };
+}
+
+function renderSidebarModels(payload) {
+  if (!(sidebarModelsContentElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const normalized = normalizeConnectedProviderModelsPayload(payload);
+  if (normalized.providers.length === 0) {
+    const message =
+      typeof connectedProviderModelsError === "string" && connectedProviderModelsError.trim().length > 0
+        ? `Unable to load model IDs (${escapeHtml(connectedProviderModelsError.trim())}).`
+        : "No connected provider models yet.";
+    sidebarModelsContentElement.innerHTML = `<p class="sidebar-models-empty">${message}</p>`;
+    return;
+  }
+
+  const markup = normalized.providers
+    .map((entry) => {
+      const providerName = providerNameById(entry.provider);
+      const statusText = entry.status === "live" ? "live" : "unavailable";
+      const countLabel = entry.accountCount === 1 ? "1 account" : `${entry.accountCount} accounts`;
+      const modelList =
+        entry.modelIds.length > 0
+          ? `<ul class="sidebar-model-list">${entry.modelIds
+              .map((modelId) => `<li class="sidebar-model-id">${escapeHtml(modelId)}</li>`)
+              .join("")}</ul>`
+          : '<p class="sidebar-models-empty">No model IDs returned.</p>';
+      const errorLine =
+        entry.syncError && entry.syncError.length > 0
+          ? `<p class="sidebar-model-provider-error">${escapeHtml(entry.syncError)}</p>`
+          : "";
+
+      return `
+        <section class="sidebar-model-provider" data-provider="${escapeHtml(entry.provider)}">
+          <div class="sidebar-model-provider-head">
+            <h3>${escapeHtml(providerName)} (${escapeHtml(countLabel)})</h3>
+            <span class="sidebar-model-provider-status">${escapeHtml(statusText)}</span>
+          </div>
+          ${modelList}
+          ${errorLine}
+        </section>
+      `;
+    })
+    .join("");
+
+  sidebarModelsContentElement.innerHTML = markup;
+}
+
+async function loadConnectedProviderModels() {
+  try {
+    const payload = await request("/api/models/connected");
+    connectedProviderModelsPayload = normalizeConnectedProviderModelsPayload(payload);
+    connectedProviderModelsError = null;
+  } catch (error) {
+    connectedProviderModelsPayload = {
+      providers: [],
+    };
+    connectedProviderModelsError = error instanceof Error ? error.message : "request failed";
+  }
+
+  renderSidebarModels(connectedProviderModelsPayload);
+}
+
 function renderDashboard(data) {
   dashboard = data;
   dashboardLoaded = true;
@@ -1250,6 +1381,13 @@ function renderDashboard(data) {
     renderConnectorKey(data.connector.apiKey || "");
   }
 
+  const routingPreferences = routingPreferencesFromDashboard();
+  renderRoutingPreferencesForm(routingPreferences);
+  if (!lastRoutingPreferencesPayload) {
+    renderRoutingPreferencesResult({ routingPreferences });
+  }
+
+  renderSidebarModels(connectedProviderModelsPayload);
   applySettingsState();
   refreshTopbarStatus();
 }
@@ -1258,6 +1396,7 @@ async function loadDashboard() {
   try {
     const payload = await request("/api/dashboard");
     renderDashboard(payload);
+    await loadConnectedProviderModels();
   } catch (error) {
     statusError = true;
     refreshTopbarStatus();
@@ -1761,6 +1900,8 @@ function renderConnectProviders(payload) {
   }
 
   renderConnectProviderCards();
+  renderRoutingPreferencesForm(routingPreferencesFromDashboard());
+  renderSidebarModels(connectedProviderModelsPayload);
   refreshTopbarStatus();
 }
 
@@ -1790,62 +1931,239 @@ async function copyConnectorKey() {
   showToast("Copied to clipboard.");
 }
 
-function sanitizeRoutePayload(payload) {
+function defaultRoutingPreferences() {
+  return {
+    preferredProvider: "auto",
+    fallbackProviders: [],
+    priorityModels: ["auto"],
+  };
+}
+
+function normalizeProviderId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!KNOWN_PROVIDER_IDS.includes(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeRoutingPreferences(payload) {
+  const defaults = defaultRoutingPreferences();
   if (!payload || typeof payload !== "object") {
-    return payload;
+    return defaults;
   }
 
-  if (!maskRoutePayload) {
-    return payload;
-  }
-
-  return sanitizePayloadNode(payload);
-}
-
-function renderRoutePayload(payload) {
-  if (!(routeResultElement instanceof HTMLElement)) {
-    return;
-  }
-
-  const safePayload = sanitizeRoutePayload(payload);
-  routeResultElement.textContent = JSON.stringify(safePayload, null, 2);
-}
-
-async function routeTest(units) {
-  if (!dashboard?.connector?.apiKey) {
-    showToast("API key missing.", true);
-    return;
-  }
-
-  if (routeResultElement) {
-    routeResultElement.textContent = "Routing...\n";
-  }
-
-  try {
-    const payload = await request("/api/connector/route", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${dashboard.connector.apiKey}` },
-      body: { units },
-    });
-
-    lastRoutePayload = payload;
-
-    renderRoutePayload(payload);
-
-    const routedName = maskDisplayName(payload.routedTo.displayName);
-
-    if (payload.quotaConsumed === false) {
-      showToast(`Routed via ${routedName}. Dashboard will auto-refresh.`);
+  const preferredRaw = payload.preferredProvider;
+  let preferredProvider = defaults.preferredProvider;
+  if (typeof preferredRaw === "string") {
+    const normalizedPreferred = preferredRaw.trim().toLowerCase();
+    if (normalizedPreferred === "auto" || normalizedPreferred.length === 0) {
+      preferredProvider = "auto";
     } else {
-      showToast(`Routed ${units} unit(s) via ${routedName}.`);
+      preferredProvider = normalizeProviderId(preferredRaw) ?? defaults.preferredProvider;
     }
-    await loadDashboard();
-  } catch (error) {
-    if (routeResultElement) {
-      routeResultElement.textContent += `\nError: ${error.message}`;
-    }
-    throw error;
   }
+
+  const fallbackProviders = [];
+  const fallbackRaw = Array.isArray(payload.fallbackProviders) ? payload.fallbackProviders : [];
+  for (const entry of fallbackRaw) {
+    const providerId = normalizeProviderId(entry);
+    if (!providerId) {
+      continue;
+    }
+
+    if (preferredProvider !== "auto" && providerId === preferredProvider) {
+      continue;
+    }
+
+    if (!fallbackProviders.includes(providerId)) {
+      fallbackProviders.push(providerId);
+    }
+  }
+
+  const priorityModels = [];
+  const priorityRaw = Array.isArray(payload.priorityModels) ? payload.priorityModels : [];
+  for (const entry of priorityRaw) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+
+    const normalized = entry.trim();
+    if (!normalized) {
+      continue;
+    }
+
+    const clipped = normalized.slice(0, 120);
+    if (!priorityModels.includes(clipped)) {
+      priorityModels.push(clipped);
+    }
+
+    if (priorityModels.length >= 20) {
+      break;
+    }
+  }
+
+  if (priorityModels.length === 0) {
+    priorityModels.push("auto");
+  }
+
+  return {
+    preferredProvider,
+    fallbackProviders,
+    priorityModels,
+  };
+}
+
+function providerNameById(providerId) {
+  const fromConnectProviders = connectProviders.find((provider) => provider.id === providerId);
+  if (fromConnectProviders && typeof fromConnectProviders.name === "string" && fromConnectProviders.name.trim()) {
+    return fromConnectProviders.name;
+  }
+
+  return providerId;
+}
+
+function availableProviderIds() {
+  const fromConnectProviders = connectProviders
+    .map((provider) => normalizeProviderId(provider.id))
+    .filter((providerId) => providerId !== null);
+  const source = fromConnectProviders.length > 0 ? fromConnectProviders : KNOWN_PROVIDER_IDS;
+  return [...new Set(source)];
+}
+
+function routingPreferencesFromDashboard() {
+  return normalizeRoutingPreferences(dashboard?.connector?.routingPreferences ?? null);
+}
+
+function renderRoutingPreferencesResult(payload) {
+  if (!(routingPriorityResultElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const safePayload = maskRoutePayload ? sanitizePayloadNode(payload) : payload;
+  routingPriorityResultElement.textContent = JSON.stringify(safePayload, null, 2);
+}
+
+function renderRoutingPreferencesForm(preferences) {
+  const normalized = normalizeRoutingPreferences(preferences);
+  const providerIds = availableProviderIds();
+
+  if (routingPreferredProviderInput instanceof HTMLSelectElement) {
+    const options = [
+      '<option value="auto">Auto (best available)</option>',
+      ...providerIds.map((providerId) => {
+        return `<option value="${escapeHtml(providerId)}">${escapeHtml(providerNameById(providerId))}</option>`;
+      }),
+    ];
+    routingPreferredProviderInput.innerHTML = options.join("");
+    routingPreferredProviderInput.value = normalized.preferredProvider;
+  }
+
+  if (routingPriorityModelsInput instanceof HTMLTextAreaElement) {
+    routingPriorityModelsInput.value = normalized.priorityModels.join("\n");
+  }
+
+  if (routingFallbackProvidersElement instanceof HTMLElement) {
+    routingFallbackProvidersElement.innerHTML = providerIds
+      .map((providerId) => {
+        const checkboxId = `routing-fallback-${providerId}`;
+        const checked = normalized.fallbackProviders.includes(providerId) ? "checked" : "";
+        const disabled = normalized.preferredProvider !== "auto" && normalized.preferredProvider === providerId;
+        const providerName = providerNameById(providerId);
+        const disabledClass = disabled ? " is-disabled" : "";
+        return `
+          <label class="settings-switch fallback-provider-switch${disabledClass}" for="${escapeHtml(checkboxId)}">
+            <div class="settings-switch-copy">
+              <p class="settings-switch-title">${escapeHtml(providerName)}</p>
+              <p class="settings-switch-note">Use as fallback route</p>
+            </div>
+            <span class="switch-control">
+              <input
+                id="${escapeHtml(checkboxId)}"
+                type="checkbox"
+                value="${escapeHtml(providerId)}"
+                aria-label="Enable fallback for ${escapeHtml(providerName)}"
+                ${checked}
+                ${disabled ? "disabled" : ""}
+              />
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </span>
+          </label>
+        `;
+      })
+      .join("");
+  }
+}
+
+function collectRoutingPreferencesFromForm() {
+  const preferredProviderRaw =
+    routingPreferredProviderInput instanceof HTMLSelectElement ? routingPreferredProviderInput.value : "auto";
+  const preferredProvider =
+    typeof preferredProviderRaw === "string" && preferredProviderRaw.trim().toLowerCase() === "auto"
+      ? "auto"
+      : normalizeProviderId(preferredProviderRaw) ?? "auto";
+
+  const fallbackProviders = [];
+  if (routingFallbackProvidersElement instanceof HTMLElement) {
+    const checkedInputs = routingFallbackProvidersElement.querySelectorAll('input[type="checkbox"]:checked');
+    for (const input of checkedInputs) {
+      if (!(input instanceof HTMLInputElement)) {
+        continue;
+      }
+
+      const providerId = normalizeProviderId(input.value);
+      if (!providerId) {
+        continue;
+      }
+
+      if (preferredProvider !== "auto" && providerId === preferredProvider) {
+        continue;
+      }
+
+      if (!fallbackProviders.includes(providerId)) {
+        fallbackProviders.push(providerId);
+      }
+    }
+  }
+
+  const rawModels =
+    routingPriorityModelsInput instanceof HTMLTextAreaElement ? routingPriorityModelsInput.value : "";
+  const priorityModels = rawModels
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .slice(0, 20)
+    .map((entry) => entry.slice(0, 120));
+
+  const normalizedModels = [...new Set(priorityModels)];
+  if (normalizedModels.length === 0) {
+    normalizedModels.push("auto");
+  }
+
+  return {
+    preferredProvider,
+    fallbackProviders,
+    priorityModels: normalizedModels,
+  };
+}
+
+async function saveRoutingPreferences(preferences) {
+  const payload = await request("/api/connector/routing", {
+    method: "POST",
+    body: preferences,
+  });
+
+  const updated = normalizeRoutingPreferences(payload?.routingPreferences ?? preferences);
+  lastRoutingPreferencesPayload = {
+    routingPreferences: updated,
+  };
+  renderRoutingPreferencesResult(lastRoutingPreferencesPayload);
+  return updated;
 }
 
 async function removeAccount(accountId) {
@@ -2120,15 +2438,43 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-if (routeForm instanceof HTMLFormElement) {
-  routeForm.addEventListener("submit", async (event) => {
+if (routingPriorityForm instanceof HTMLFormElement) {
+  routingPriorityForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const data = new FormData(routeForm);
-    const units = Number(data.get("units"));
+
     try {
-      await routeTest(units);
+      const nextPreferences = collectRoutingPreferencesFromForm();
+      const saved = await saveRoutingPreferences(nextPreferences);
+      renderRoutingPreferencesForm(saved);
+      setConnectorControlsEnabled(dashboardAuthorized);
+      showToast("Routing priority saved.");
+      await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Route test failed.", true);
+      showToast(error.message || "Failed to save routing priority.", true);
+    }
+  });
+}
+
+if (routingPreferredProviderInput instanceof HTMLSelectElement) {
+  routingPreferredProviderInput.addEventListener("change", () => {
+    const nextPreferences = collectRoutingPreferencesFromForm();
+    renderRoutingPreferencesForm(nextPreferences);
+    setConnectorControlsEnabled(dashboardAuthorized);
+  });
+}
+
+if (routingPriorityResetButton instanceof HTMLButtonElement) {
+  routingPriorityResetButton.addEventListener("click", async () => {
+    try {
+      const defaults = defaultRoutingPreferences();
+      renderRoutingPreferencesForm(defaults);
+      setConnectorControlsEnabled(dashboardAuthorized);
+      const saved = await saveRoutingPreferences(defaults);
+      renderRoutingPreferencesForm(saved);
+      showToast("Routing priority reset to auto.");
+      await loadDashboard();
+    } catch (error) {
+      showToast(error.message || "Failed to reset routing priority.", true);
     }
   });
 }
@@ -2282,8 +2628,8 @@ if (maskRoutePayloadInput instanceof HTMLInputElement) {
   maskRoutePayloadInput.addEventListener("change", () => {
     maskRoutePayload = maskRoutePayloadInput.checked;
     persistUiSettings();
-    if (lastRoutePayload) {
-      renderRoutePayload(lastRoutePayload);
+    if (lastRoutingPreferencesPayload) {
+      renderRoutingPreferencesResult(lastRoutingPreferencesPayload);
     }
   });
 }
