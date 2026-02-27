@@ -963,57 +963,33 @@ function windowLabelForKey(windowKey) {
   return windowKey === "fiveHour" ? "Window A" : "Window B";
 }
 
-function nearestDurationMs(valueMs, candidatesMs) {
-  if (!Number.isFinite(valueMs) || valueMs <= 0 || !Array.isArray(candidatesMs) || candidatesMs.length === 0) {
+function isSyntheticWindowStart(windowData, quotaSyncedAt) {
+  const windowStartedAtMs = parseIsoMs(windowData?.windowStartedAt);
+  const syncedAtMs = parseIsoMs(quotaSyncedAt);
+  if (Number.isNaN(windowStartedAtMs) || Number.isNaN(syncedAtMs)) {
+    return false;
+  }
+
+  return Math.abs(windowStartedAtMs - syncedAtMs) <= 10 * 60 * 1000;
+}
+
+function inferredScheduleDurationMs(windowData, quotaSyncedAt) {
+  if (isSyntheticWindowStart(windowData, quotaSyncedAt)) {
     return null;
   }
 
-  let winner = null;
-  let smallestDelta = Number.POSITIVE_INFINITY;
-  for (const candidateMs of candidatesMs) {
-    if (!Number.isFinite(candidateMs) || candidateMs <= 0) {
-      continue;
-    }
-
-    const delta = Math.abs(candidateMs - valueMs);
-    if (delta < smallestDelta) {
-      winner = candidateMs;
-      smallestDelta = delta;
-    }
-  }
-
-  return winner;
-}
-
-function inferredScheduleDurationMs(windowData) {
   const startedAtMs = parseIsoMs(windowData?.windowStartedAt);
   const resetAtMs = parseIsoMs(windowData?.resetsAt);
 
   if (!Number.isNaN(startedAtMs) && !Number.isNaN(resetAtMs) && resetAtMs > startedAtMs) {
-    const windowDurationMs = resetAtMs - startedAtMs;
-    return nearestDurationMs(windowDurationMs, [
-      60 * 60 * 1000,
-      5 * 60 * 60 * 1000,
-      24 * 60 * 60 * 1000,
-      7 * 24 * 60 * 60 * 1000,
-      30 * 24 * 60 * 60 * 1000,
-    ]);
-  }
-
-  if (!Number.isNaN(resetAtMs)) {
-    const remainingMs = resetAtMs - Date.now();
-    return nearestDurationMs(remainingMs, [
-      24 * 60 * 60 * 1000,
-      7 * 24 * 60 * 60 * 1000,
-      30 * 24 * 60 * 60 * 1000,
-    ]);
+    return resetAtMs - startedAtMs;
   }
 
   return null;
 }
 
-function quotaWindowScheduleLabel(windowData, fallbackLabel) {
-  const scheduleDurationMs = inferredScheduleDurationMs(windowData);
+function quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt) {
+  const scheduleDurationMs = inferredScheduleDurationMs(windowData, quotaSyncedAt);
   const durationLabel = compactDurationLabel(scheduleDurationMs ?? Number.NaN);
   if (durationLabel) {
     return `Every ${durationLabel}`;
@@ -1022,9 +998,13 @@ function quotaWindowScheduleLabel(windowData, fallbackLabel) {
   return fallbackLabel;
 }
 
-function buildQuotaWindowView(windowData, fallbackLabel) {
+function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
   const presentation = quotaWindowPresentation(windowData);
-  const scheduleDurationMs = inferredScheduleDurationMs(windowData);
+  const scheduleDurationMs = inferredScheduleDurationMs(windowData, quotaSyncedAt);
+  const explicitLabel =
+    typeof windowData?.label === "string" && windowData.label.trim().length > 0
+      ? windowData.label.trim()
+      : null;
   const limit = Number(windowData?.limit);
   const used = Number(windowData?.used);
   const remaining = Number(windowData?.remaining);
@@ -1034,7 +1014,7 @@ function buildQuotaWindowView(windowData, fallbackLabel) {
 
   return {
     ...presentation,
-    label: quotaWindowScheduleLabel(windowData, fallbackLabel),
+    label: explicitLabel ?? quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt),
     scheduleDurationMs: Number.isFinite(scheduleDurationMs) ? scheduleDurationMs : null,
     limit: safeLimit,
     used: safeUsed,
@@ -1048,16 +1028,18 @@ function quotaWindowSignature(windowView) {
       ? Math.round(windowView.scheduleDurationMs / 60_000)
       : "na";
   const resetKey = typeof windowView.resetAt === "string" ? windowView.resetAt : "na";
+  const labelKey = typeof windowView.label === "string" ? windowView.label : "na";
   const ratioKey = Math.round(windowView.ratio * 1000);
   const limitKey = Math.round(windowView.limit * 1000);
   const usedKey = Math.round(windowView.used * 1000);
-  return `${scheduleKey}|${resetKey}|${ratioKey}|${limitKey}|${usedKey}`;
+  return `${scheduleKey}|${labelKey}|${resetKey}|${ratioKey}|${limitKey}|${usedKey}`;
 }
 
 function normalizedAccountQuotaWindows(account) {
+  const quotaSyncedAt = typeof account?.quotaSyncedAt === "string" ? account.quotaSyncedAt : null;
   const candidates = [
-    buildQuotaWindowView(account?.quota?.fiveHour, windowLabelForKey("fiveHour")),
-    buildQuotaWindowView(account?.quota?.weekly, windowLabelForKey("weekly")),
+    buildQuotaWindowView(account?.quota?.fiveHour, windowLabelForKey("fiveHour"), quotaSyncedAt),
+    buildQuotaWindowView(account?.quota?.weekly, windowLabelForKey("weekly"), quotaSyncedAt),
   ];
 
   const seen = new Set();
@@ -1226,8 +1208,7 @@ function buildDashboardWindowMetrics(accounts) {
         Number.isFinite(windowView.scheduleDurationMs) && windowView.scheduleDurationMs !== null
           ? Math.round(windowView.scheduleDurationMs)
           : null;
-      const scheduleKey =
-        scheduleDurationMs !== null ? `duration:${scheduleDurationMs}` : `label:${windowView.label}`;
+      const scheduleKey = `${scheduleDurationMs ?? "na"}|${windowView.label}`;
 
       let bucket = buckets.get(scheduleKey);
       if (!bucket) {
