@@ -4,7 +4,7 @@ import { PROVIDER_CATALOG, isProviderId, providerOAuthProfileDefinitions } from 
 import { ConnectorService } from "../services/connector";
 import { OAuthProviderService } from "../services/oauth-provider";
 import { ProviderUsageService } from "../services/provider-usage";
-import { AccountSettingsUpdatePayload } from "../types";
+import { AccountSettingsUpdatePayload, RoutingPreferences } from "../types";
 
 interface ApiRouterDependencies {
   connectorService: ConnectorService;
@@ -40,6 +40,112 @@ function parseUnits(rawUnits: unknown): number {
   }
 
   return numeric;
+}
+
+function parseOptionalModel(rawModel: unknown): string | null {
+  if (rawModel === undefined || rawModel === null) {
+    return null;
+  }
+
+  if (typeof rawModel !== "string") {
+    throw new HttpError(400, "invalid_model", "Model must be a string when provided.");
+  }
+
+  const normalized = rawModel.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, 120);
+}
+
+function parseRoutingPreferencesBody(rawBody: unknown, current: RoutingPreferences): RoutingPreferences {
+  const body = (rawBody && typeof rawBody === "object" ? rawBody : {}) as {
+    preferredProvider?: unknown;
+    fallbackProviders?: unknown;
+    priorityModels?: unknown;
+  };
+
+  let preferredProvider = current.preferredProvider;
+  if (body.preferredProvider !== undefined) {
+    if (typeof body.preferredProvider !== "string") {
+      throw new HttpError(400, "invalid_routing_preferences", "Preferred provider must be a string.");
+    }
+
+    const normalized = body.preferredProvider.trim().toLowerCase();
+    if (!normalized || normalized === "auto") {
+      preferredProvider = "auto";
+    } else if (isProviderId(normalized)) {
+      preferredProvider = normalized;
+    } else {
+      throw new HttpError(400, "invalid_routing_preferences", "Preferred provider is not supported.");
+    }
+  }
+
+  let fallbackProviders = [...current.fallbackProviders];
+  if (body.fallbackProviders !== undefined) {
+    if (!Array.isArray(body.fallbackProviders)) {
+      throw new HttpError(400, "invalid_routing_preferences", "Fallback providers must be an array.");
+    }
+
+    fallbackProviders = [];
+    for (const entry of body.fallbackProviders) {
+      if (typeof entry !== "string") {
+        throw new HttpError(400, "invalid_routing_preferences", "Fallback providers must contain strings.");
+      }
+
+      const normalized = entry.trim().toLowerCase();
+      if (!isProviderId(normalized)) {
+        throw new HttpError(400, "invalid_routing_preferences", `Unsupported fallback provider: ${entry}`);
+      }
+
+      if (preferredProvider !== "auto" && normalized === preferredProvider) {
+        continue;
+      }
+
+      if (!fallbackProviders.includes(normalized)) {
+        fallbackProviders.push(normalized);
+      }
+    }
+  }
+
+  let priorityModels = [...current.priorityModels];
+  if (body.priorityModels !== undefined) {
+    if (!Array.isArray(body.priorityModels)) {
+      throw new HttpError(400, "invalid_routing_preferences", "Priority models must be an array.");
+    }
+
+    priorityModels = [];
+    for (const entry of body.priorityModels) {
+      if (typeof entry !== "string") {
+        throw new HttpError(400, "invalid_routing_preferences", "Priority models must contain strings.");
+      }
+
+      const normalized = entry.trim();
+      if (!normalized) {
+        continue;
+      }
+
+      const clipped = normalized.slice(0, 120);
+      if (!priorityModels.includes(clipped)) {
+        priorityModels.push(clipped);
+      }
+
+      if (priorityModels.length >= 20) {
+        break;
+      }
+    }
+
+    if (priorityModels.length === 0) {
+      priorityModels.push("auto");
+    }
+  }
+
+  return {
+    preferredProvider,
+    fallbackProviders,
+    priorityModels,
+  };
 }
 
 function parseApiLinkBody(rawBody: unknown): {
@@ -235,6 +341,12 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
     });
   });
 
+  router.get("/models/connected", async (req, res) => {
+    assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
+    const payload = await dependencies.connectorService.connectedProviderModels();
+    res.json(payload);
+  });
+
   router.post("/accounts/:accountId/remove", (req, res) => {
     assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
     const accountId = req.params.accountId;
@@ -288,10 +400,33 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
     });
   });
 
+  router.get("/connector/routing", (req, res) => {
+    assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
+    res.json({
+      routingPreferences: dependencies.connectorService.routingPreferences(),
+    });
+  });
+
+  router.post("/connector/routing", (req, res) => {
+    assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
+    const current = dependencies.connectorService.routingPreferences();
+    const next = parseRoutingPreferencesBody(req.body, current);
+    const updated = dependencies.connectorService.updateRoutingPreferences(next);
+
+    res.json({
+      routingPreferences: updated,
+    });
+  });
+
   router.post("/connector/route", async (req, res) => {
     const connectorKey = parseBearerToken(req.header("Authorization") ?? undefined);
-    const units = parseUnits((req.body as { units?: number } | undefined)?.units);
-    const decision = await dependencies.connectorService.routeRequest(connectorKey, units);
+    const body = (req.body ?? {}) as {
+      units?: unknown;
+      model?: unknown;
+    };
+    const units = parseUnits(body.units);
+    const model = parseOptionalModel(body.model);
+    const decision = await dependencies.connectorService.routeRequest(connectorKey, units, model ?? undefined);
 
     res.json(decision);
   });

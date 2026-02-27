@@ -1,13 +1,17 @@
 import { HttpError } from "../errors";
 import {
   AccountSettingsUpdatePayload,
+  ConnectedProviderModelsPayload,
   ApiLinkedAccountPayload,
   ConnectedAccount,
   DashboardAccount,
   DashboardPayload,
   DashboardTotals,
   OAuthLinkedAccountPayload,
+  ProviderId,
+  RoutingPreferences,
   RouteDecision,
+  createDefaultRoutingPreferences,
 } from "../types";
 import { AccountRepository } from "../storage/account-repository";
 import {
@@ -18,6 +22,7 @@ import {
   toDashboardAccount,
 } from "./quota";
 import { OAuthProviderService } from "./oauth-provider";
+import { ProviderModelsService } from "./provider-models";
 import { ProviderUsageService } from "./provider-usage";
 
 function assertPositiveUnits(units: number): number {
@@ -45,6 +50,102 @@ function sortDashboardAccounts(accounts: DashboardAccount[]): DashboardAccount[]
     }
 
     return b.quota.fiveHour.remaining - a.quota.fiveHour.remaining;
+  });
+}
+
+function compareTrueFirst(a: boolean, b: boolean): number {
+  if (a === b) {
+    return 0;
+  }
+
+  return a ? -1 : 1;
+}
+
+function inferProviderFromModelReference(reference: string): ProviderId | null {
+  const normalized = reference.trim().toLowerCase();
+  if (!normalized || normalized === "auto") {
+    return null;
+  }
+
+  const providers: ProviderId[] = ["codex", "gemini", "claude", "openrouter"];
+  for (const provider of providers) {
+    if (
+      normalized === provider ||
+      normalized.startsWith(`${provider}/`) ||
+      normalized.startsWith(`${provider}:`) ||
+      normalized.startsWith(`${provider}-`)
+    ) {
+      return provider;
+    }
+  }
+
+  return null;
+}
+
+function providerOrderFromPriorityModels(priorityModels: string[]): ProviderId[] {
+  const order: ProviderId[] = [];
+  for (const model of priorityModels) {
+    const provider = inferProviderFromModelReference(model);
+    if (!provider) {
+      continue;
+    }
+
+    if (!order.includes(provider)) {
+      order.push(provider);
+    }
+  }
+
+  return order;
+}
+
+function orderCandidatesByRoutingPreferences(
+  candidates: ConnectedAccount[],
+  preferences: RoutingPreferences,
+  modelHint: string | null,
+): ConnectedAccount[] {
+  const modelHintProvider = modelHint ? inferProviderFromModelReference(modelHint) : null;
+  const preferredProvider = preferences.preferredProvider;
+  const modelPriorityProviderOrder = providerOrderFromPriorityModels(preferences.priorityModels);
+  const fallbackProviderOrder = preferences.fallbackProviders;
+
+  const modelPriorityRank = new Map<ProviderId, number>();
+  for (const [index, providerId] of modelPriorityProviderOrder.entries()) {
+    modelPriorityRank.set(providerId, index);
+  }
+
+  const fallbackRank = new Map<ProviderId, number>();
+  for (const [index, providerId] of fallbackProviderOrder.entries()) {
+    fallbackRank.set(providerId, index);
+  }
+
+  return [...candidates].sort((a, b) => {
+    if (modelHintProvider) {
+      const modelHintCompare = compareTrueFirst(a.provider === modelHintProvider, b.provider === modelHintProvider);
+      if (modelHintCompare !== 0) {
+        return modelHintCompare;
+      }
+    }
+
+    if (preferredProvider !== "auto") {
+      const preferredCompare = compareTrueFirst(a.provider === preferredProvider, b.provider === preferredProvider);
+      if (preferredCompare !== 0) {
+        return preferredCompare;
+      }
+    }
+
+    const aModelRank = modelPriorityRank.get(a.provider) ?? Number.MAX_SAFE_INTEGER;
+    const bModelRank = modelPriorityRank.get(b.provider) ?? Number.MAX_SAFE_INTEGER;
+    if (aModelRank !== bModelRank) {
+      return aModelRank - bModelRank;
+    }
+
+    const aFallbackRank = fallbackRank.get(a.provider) ?? Number.MAX_SAFE_INTEGER;
+    const bFallbackRank = fallbackRank.get(b.provider) ?? Number.MAX_SAFE_INTEGER;
+    if (aFallbackRank !== bFallbackRank) {
+      return aFallbackRank - bFallbackRank;
+    }
+
+    return compareByAvailability(a, b);
   });
 }
 
@@ -158,6 +259,7 @@ export class ConnectorService {
     private readonly accounts: AccountRepository,
     private readonly oauthProviderService: OAuthProviderService,
     private readonly providerUsageService: ProviderUsageService,
+    private readonly providerModelsService: ProviderModelsService,
     private readonly strictLiveQuota: boolean,
   ) {}
 
@@ -183,6 +285,12 @@ export class ConnectorService {
     };
   }
 
+  public async connectedProviderModels(): Promise<ConnectedProviderModelsPayload> {
+    await this.syncAccountState();
+    const snapshot = this.accounts.read();
+    return await this.providerModelsService.fetchConnectedProviderModels(snapshot.accounts);
+  }
+
   public linkOAuthAccount(payload: OAuthLinkedAccountPayload): void {
     this.accounts.upsertOAuthAccount(payload);
   }
@@ -203,10 +311,87 @@ export class ConnectorService {
     return this.accounts.rotateConnectorApiKey();
   }
 
-  public async routeRequest(apiKey: string, units: number): Promise<RouteDecision> {
+  public routingPreferences(): RoutingPreferences {
+    return this.accounts.routingPreferences();
+  }
+
+  public updateRoutingPreferences(preferences: RoutingPreferences): RoutingPreferences {
+    return this.accounts.updateRoutingPreferences(preferences);
+  }
+
+  public async routeCandidates(apiKey: string, units: number, modelHint?: string): Promise<ConnectedAccount[]> {
     await this.syncAccountState();
 
     const safeUnits = assertPositiveUnits(units);
+    const normalizedModelHint =
+      typeof modelHint === "string" && modelHint.trim().length > 0 ? modelHint.trim() : null;
+
+    const snapshot = this.accounts.read();
+    if (snapshot.connector.apiKey !== apiKey) {
+      throw new HttpError(401, "invalid_connector_key", "Connector API key is missing or invalid.");
+    }
+
+    for (const account of snapshot.accounts) {
+      normalizeAccountQuota(account);
+    }
+
+    const candidates = snapshot.accounts.filter(
+      (account) =>
+        canServeUnits(account, safeUnits) &&
+        (!this.strictLiveQuota || (account.quotaSyncStatus ?? "unavailable") === "live"),
+    );
+    if (candidates.length === 0) {
+      if (this.strictLiveQuota) {
+        throw new HttpError(
+          503,
+          "strict_live_quota_required",
+          "Strict live quota mode is enabled. No account has live provider usage data.",
+        );
+      }
+
+      throw new HttpError(
+        503,
+        "no_available_accounts",
+        "No account has enough remaining 5h and weekly quota for this request.",
+      );
+    }
+
+    const routingPreferences = snapshot.connector.routingPreferences ?? createDefaultRoutingPreferences();
+    return orderCandidatesByRoutingPreferences(candidates, routingPreferences, normalizedModelHint);
+  }
+
+  public consumeRoutedUsage(accountId: string, units: number): void {
+    const safeUnits = assertPositiveUnits(units);
+
+    this.accounts.update((draft) => {
+      const account = draft.accounts.find((candidate) => candidate.id === accountId);
+      if (!account) {
+        throw new HttpError(404, "route_target_not_found", "Selected route target no longer exists.");
+      }
+
+      normalizeAccountQuota(account);
+      if (this.strictLiveQuota || account.quotaSyncStatus === "live") {
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      if (hasUnknownQuotaLimits(account)) {
+        applyEstimatedUsage(account, safeUnits, nowIso);
+      } else {
+        account.quota.fiveHour.used += safeUnits;
+        account.quota.weekly.used += safeUnits;
+      }
+
+      account.updatedAt = nowIso;
+    });
+  }
+
+  public async routeRequest(apiKey: string, units: number, modelHint?: string): Promise<RouteDecision> {
+    await this.syncAccountState();
+
+    const safeUnits = assertPositiveUnits(units);
+    const normalizedModelHint =
+      typeof modelHint === "string" && modelHint.trim().length > 0 ? modelHint.trim() : null;
 
     let decision: RouteDecision | null = null;
 
@@ -244,8 +429,9 @@ export class ConnectorService {
         );
       }
 
-      candidates.sort(compareByAvailability);
-      const selected = candidates[0];
+      const routingPreferences = draft.connector.routingPreferences ?? createDefaultRoutingPreferences();
+      const prioritizedCandidates = orderCandidatesByRoutingPreferences(candidates, routingPreferences, normalizedModelHint);
+      const selected = prioritizedCandidates[0];
       if (!selected) {
         throw new HttpError(503, "no_route_target", "Unable to select an account.");
       }
@@ -276,10 +462,7 @@ export class ConnectorService {
         quotaConsumed,
         authorizationHeader: `Bearer ${selected.accessToken}`,
         remaining: {
-          fiveHour: Math.min(
-            remainingQuota(selected.quota.fiveHour),
-            remainingQuota(selected.quota.weekly),
-          ),
+          fiveHour: remainingQuota(selected.quota.fiveHour),
           weekly: remainingQuota(selected.quota.weekly),
         },
       };

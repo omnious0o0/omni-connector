@@ -6,9 +6,11 @@ import helmet from "helmet";
 import { AppConfig, resolveConfig } from "./config";
 import { isHttpError } from "./errors";
 import { createApiRouter } from "./routes/api";
+import { createOpenAiRouter } from "./routes/openai";
 import { createOAuthRouter } from "./routes/oauth";
 import { ConnectorService } from "./services/connector";
 import { OAuthProviderService } from "./services/oauth-provider";
+import { ProviderModelsService } from "./services/provider-models";
 import { ProviderUsageService } from "./services/provider-usage";
 import { AccountRepository } from "./storage/account-repository";
 import { DataStore } from "./store";
@@ -27,7 +29,10 @@ function isResolvedConfig(config: Partial<AppConfig>): config is AppConfig {
     typeof config.oauthClientId === "string" &&
     typeof config.oauthClientSecret === "string" &&
     typeof config.oauthOriginator === "string" &&
+    typeof config.codexChatgptBaseUrl === "string" &&
     Array.isArray(config.oauthScopes) &&
+    typeof config.providerInferenceBaseUrls === "object" &&
+    config.providerInferenceBaseUrls !== null &&
     typeof config.providerUsage === "object" &&
     config.providerUsage !== null &&
     typeof config.oauthProfiles === "object" &&
@@ -47,10 +52,12 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
   const accountRepository = new AccountRepository(store);
   const oauthProviderService = new OAuthProviderService(config);
   const providerUsageService = new ProviderUsageService(config);
+  const providerModelsService = new ProviderModelsService(config);
   const connectorService = new ConnectorService(
     accountRepository,
     oauthProviderService,
     providerUsageService,
+    providerModelsService,
     config.strictLiveQuota,
   );
 
@@ -108,6 +115,14 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
       allowRemoteDashboard: config.allowRemoteDashboard,
     }),
   );
+  app.use(
+    "/v1",
+    createOpenAiRouter({
+      connectorService,
+      providerInferenceBaseUrls: config.providerInferenceBaseUrls,
+      codexChatgptBaseUrl: config.codexChatgptBaseUrl,
+    }),
+  );
 
   const assetDirectory = [
     path.join(config.publicDir, "assets"),
@@ -140,6 +155,7 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
 
     if (
       req.path.startsWith("/api/") ||
+      req.path.startsWith("/v1/") ||
       req.path.startsWith("/assets") ||
       req.path.startsWith("/auth/") ||
       req.path.startsWith("/oauth/") ||
@@ -153,8 +169,10 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
   });
 
   app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const shouldReturnJson = req.path.startsWith("/api/") || req.path.startsWith("/v1/");
+
     if (isHttpError(error)) {
-      if (req.path.startsWith("/api/")) {
+      if (shouldReturnJson) {
         const message = error.status >= 500 ? "Unexpected server error." : error.message;
         res.status(error.status).json({
           error: error.code,
@@ -172,7 +190,7 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
       return;
     }
 
-    if (req.path.startsWith("/api/")) {
+    if (shouldReturnJson) {
       res.status(500).json({
         error: "internal_error",
         message: "Unexpected server error.",

@@ -5,6 +5,21 @@ export type ProviderId =
   | "openrouter";
 export type AccountAuthMethod = "oauth" | "api";
 export type QuotaWindowMode = "units" | "percent";
+export type RoutingPreferredProvider = ProviderId | "auto";
+
+export interface RoutingPreferences {
+  preferredProvider: RoutingPreferredProvider;
+  fallbackProviders: ProviderId[];
+  priorityModels: string[];
+}
+
+export function createDefaultRoutingPreferences(): RoutingPreferences {
+  return {
+    preferredProvider: "auto",
+    fallbackProviders: [],
+    priorityModels: ["auto"],
+  };
+}
 
 export interface QuotaWindowState {
   limit: number;
@@ -47,6 +62,7 @@ export interface ConnectorState {
   apiKey: string;
   createdAt: string;
   lastRotatedAt: string;
+  routingPreferences: RoutingPreferences;
 }
 
 export interface PersistedData {
@@ -146,6 +162,19 @@ export interface DashboardPayload {
   totals: DashboardTotals;
   bestAccount: DashboardAccount | null;
   accounts: DashboardAccount[];
+}
+
+export interface ConnectedProviderModelsEntry {
+  provider: ProviderId;
+  accountCount: number;
+  status: "live" | "unavailable";
+  modelIds: string[];
+  syncError: string | null;
+  fetchedAt: string;
+}
+
+export interface ConnectedProviderModelsPayload {
+  providers: ConnectedProviderModelsEntry[];
 }
 
 export interface RouteDecision {
