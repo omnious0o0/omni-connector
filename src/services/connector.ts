@@ -725,7 +725,7 @@ export class ConnectorService {
         });
       } catch (error) {
         const detail = syncErrorDetail(error, "unknown live quota sync failure");
-        const message = "Failed to sync live quota.";
+        const message = `Live quota sync failed: ${detail}`;
         process.stderr.write(`Live quota sync failed for account ${target.id}: ${detail}\n`);
         const nowIso = new Date().toISOString();
         this.accounts.update((draft) => {

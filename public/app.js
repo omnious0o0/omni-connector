@@ -968,15 +968,33 @@ function cadenceLabelFromMinutes(windowMinutes) {
   const dayMinutes = 24 * 60;
   if (roundedMinutes % dayMinutes === 0) {
     const days = Math.round(roundedMinutes / dayMinutes);
-    return `Every ${days}d`;
+    return `${days}d`;
   }
 
   if (roundedMinutes % 60 === 0) {
     const hours = Math.round(roundedMinutes / 60);
-    return `Every ${hours}h`;
+    return `${hours}h`;
   }
 
-  return `Every ${roundedMinutes}m`;
+  return `${roundedMinutes}m`;
+}
+
+function normalizeQuotaLabel(labelValue) {
+  if (typeof labelValue !== "string") {
+    return "";
+  }
+
+  const trimmed = labelValue.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+
+  const compact = trimmed.replace(/[_\s-]+/g, "").toLowerCase();
+  if (compact === "requests" || compact === "tokens" || compact === "calls") {
+    return "";
+  }
+
+  return trimmed;
 }
 
 function isSyntheticWindowStart(windowData, quotaSyncedAt) {
@@ -1035,10 +1053,7 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
   const inferredDurationMs = inferredScheduleDurationMs(windowData, quotaSyncedAt);
   const scheduleDurationMs =
     windowMinutes !== null ? windowMinutes * 60_000 : Number.isFinite(inferredDurationMs) ? inferredDurationMs : null;
-  const explicitLabel =
-    typeof windowData?.label === "string" && windowData.label.trim().length > 0
-      ? windowData.label.trim()
-      : null;
+  const explicitLabel = normalizeQuotaLabel(windowData?.label);
   const limit = Number(windowData?.limit);
   const used = Number(windowData?.used);
   const remaining = Number(windowData?.remaining);
@@ -1048,7 +1063,7 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
 
   return {
     ...presentation,
-    label: explicitLabel ?? quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt),
+    label: explicitLabel || quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt),
     windowMinutes,
     scheduleDurationMs,
     limit: safeLimit,
@@ -1167,6 +1182,22 @@ function providerIdentityForAccount(account) {
 function quotaWindowPresentation(windowData) {
   const limit = Number(windowData?.limit);
   if (!Number.isFinite(limit) || limit <= 0) {
+    const resetAtFallback =
+      typeof windowData?.resetsAt === "string" && windowData.resetsAt.trim().length > 0 ? windowData.resetsAt : null;
+    const remainingRatioFallback = clampRatio(Number(windowData?.remainingRatio));
+    const hasPercentFallback = Number.isFinite(remainingRatioFallback) && remainingRatioFallback >= 0;
+    if (hasPercentFallback) {
+      const remainingPercent = remainingRatioFallback * 100;
+      const usedPercent = 100 - remainingPercent;
+      return {
+        value: `${formatPercentValue(remainingPercent)}`,
+        detail: `${formatPercentValue(usedPercent)} used / 100% capacity`,
+        ratio: remainingRatioFallback,
+        resetLabel: formatResetTime(resetAtFallback),
+        resetAt: resetAtFallback,
+      };
+    }
+
     return {
       value: "N/A",
       detail: "Live usage unavailable",
@@ -1209,7 +1240,7 @@ function usageEstimateNote(account) {
 
   if (samples <= 0) {
     if (fiveHourLimit <= 0 || weeklyLimit <= 0) {
-      return "Usage is N/A until the first routed request. Estimation starts on first use.";
+      return "Usage estimate starts after the first routed request.";
     }
 
     return null;

@@ -78,11 +78,144 @@ function quotaTokenTypeLabel(tokenType: string | null): string | null {
     return null;
   }
 
+  const compact = normalized.replace(/[_\s-]+/g, "").toLowerCase();
+  if (compact === "requests" || compact === "tokens" || compact === "calls") {
+    return null;
+  }
+
   return normalized
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .toLowerCase()
     .replace(/\b[a-z]/g, (char) => char.toUpperCase());
+}
+
+function inferWindowMinutesFromReset(resetMs: number | null, referenceMs: number): number | null {
+  if (!Number.isFinite(resetMs) || resetMs === null || !Number.isFinite(referenceMs)) {
+    return null;
+  }
+
+  const remainingMinutes = (resetMs - referenceMs) / 60_000;
+  if (!Number.isFinite(remainingMinutes) || remainingMinutes <= 0) {
+    return null;
+  }
+
+  const candidates = [60, 5 * 60, 24 * 60, 7 * 24 * 60];
+  let winner: number | null = null;
+  let bestRelativeDelta = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const relativeDelta = Math.abs(remainingMinutes - candidate) / candidate;
+    if (relativeDelta < bestRelativeDelta) {
+      bestRelativeDelta = relativeDelta;
+      winner = candidate;
+    }
+  }
+
+  if (winner === null) {
+    return null;
+  }
+
+  return bestRelativeDelta <= 0.35 ? winner : null;
+}
+
+function parseWindowMinutesFromText(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const text = value.trim().toLowerCase();
+  if (!text) {
+    return null;
+  }
+
+  const asMinutes = (amount: number, multiplier: number): number | null => {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return null;
+    }
+
+    return Math.max(1, Math.round(amount * multiplier));
+  };
+
+  if (text.includes("daily") || text.includes("per_day") || text.includes("per-day")) {
+    return 24 * 60;
+  }
+
+  if (text.includes("weekly") || text.includes("per_week") || text.includes("per-week")) {
+    return 7 * 24 * 60;
+  }
+
+  if (text.includes("hourly") || text.includes("per_hour") || text.includes("per-hour")) {
+    return 60;
+  }
+
+  const tokenMatch = /(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b/i.exec(text);
+  if (!tokenMatch) {
+    return null;
+  }
+
+  const valueNumber = Number(tokenMatch[1]);
+  const unit = (tokenMatch[2] ?? "").toLowerCase();
+  if (unit.startsWith("m")) {
+    return asMinutes(valueNumber, 1);
+  }
+
+  if (unit.startsWith("h")) {
+    return asMinutes(valueNumber, 60);
+  }
+
+  if (unit.startsWith("d")) {
+    return asMinutes(valueNumber, 24 * 60);
+  }
+
+  if (unit.startsWith("w")) {
+    return asMinutes(valueNumber, 7 * 24 * 60);
+  }
+
+  return null;
+}
+
+function extractBucketWindowMinutes(bucket: Record<string, unknown>, tokenType: string | null): number | null {
+  const directMinutes = [
+    "windowMinutes",
+    "window_minutes",
+    "limitWindowMinutes",
+    "limit_window_minutes",
+    "windowDurationMinutes",
+    "window_duration_minutes",
+    "windowDurationMins",
+    "window_duration_mins",
+    "periodMinutes",
+    "period_minutes",
+    "intervalMinutes",
+    "interval_minutes",
+  ];
+
+  for (const key of directMinutes) {
+    const value = asNumber(bucket[key]);
+    if (value !== null && value > 0) {
+      return Math.max(1, Math.round(value));
+    }
+  }
+
+  const secondKeys = [
+    "windowSeconds",
+    "window_seconds",
+    "limitWindowSeconds",
+    "limit_window_seconds",
+    "periodSeconds",
+    "period_seconds",
+    "intervalSeconds",
+    "interval_seconds",
+  ];
+
+  for (const key of secondKeys) {
+    const seconds = asNumber(bucket[key]);
+    if (seconds !== null && seconds > 0) {
+      return Math.max(1, Math.round(seconds / 60));
+    }
+  }
+
+  return parseWindowMinutesFromText(tokenType);
 }
 
 function clampUsed(used: number, limit: number): number {
@@ -561,8 +694,12 @@ export class ProviderUsageService {
     const bucketWindows: Array<{
       remainingFraction: number;
       resetMs: number | null;
+      resetKeyMs: number | null;
       tokenType: string | null;
+      windowMinutes: number | null;
     }> = [];
+
+    const syncedAtMs = Date.now();
 
     for (const bucketEntry of asArray(root.buckets)) {
       const bucket = asRecord(bucketEntry);
@@ -581,11 +718,17 @@ export class ProviderUsageService {
       const resetMsRaw = resetTime ? Date.parse(resetTime) : Number.NaN;
       const resetMs = Number.isNaN(resetMsRaw) ? null : resetMsRaw;
       const tokenType = asString(bucket.tokenType ?? bucket.token_type);
+      const extractedWindowMinutes = extractBucketWindowMinutes(bucket, tokenType);
+      const windowMinutes =
+        extractedWindowMinutes ?? inferWindowMinutesFromReset(resetMs, syncedAtMs);
+      const resetKeyMs = resetMs === null ? null : Math.round(resetMs / 60_000) * 60_000;
 
       bucketWindows.push({
         remainingFraction: normalizedRemaining,
         resetMs,
+        resetKeyMs,
         tokenType,
+        windowMinutes,
       });
     }
 
@@ -593,28 +736,35 @@ export class ProviderUsageService {
       return null;
     }
 
-    const syncedAt = new Date().toISOString();
+    const syncedAt = new Date(syncedAtMs).toISOString();
     const groupedWindows = new Map<
       string,
       {
         remainingFractions: number[];
         resetMs: number | null;
+        resetKeyMs: number | null;
         tokenType: string | null;
+        windowMinutes: number | null;
       }
     >();
 
     for (const bucketWindow of bucketWindows) {
-      const key = `${bucketWindow.tokenType ?? "unknown"}|${bucketWindow.resetMs ?? "na"}`;
+      const key = `${bucketWindow.tokenType ?? "unknown"}|${bucketWindow.resetKeyMs ?? "na"}|${bucketWindow.windowMinutes ?? "na"}`;
       const existing = groupedWindows.get(key);
       if (existing) {
         existing.remainingFractions.push(bucketWindow.remainingFraction);
+        if (existing.windowMinutes === null && bucketWindow.windowMinutes !== null) {
+          existing.windowMinutes = bucketWindow.windowMinutes;
+        }
         continue;
       }
 
       groupedWindows.set(key, {
         remainingFractions: [bucketWindow.remainingFraction],
         resetMs: bucketWindow.resetMs,
+        resetKeyMs: bucketWindow.resetKeyMs,
         tokenType: bucketWindow.tokenType,
+        windowMinutes: bucketWindow.windowMinutes,
       });
     }
 
@@ -627,10 +777,10 @@ export class ProviderUsageService {
           used: usedPercent,
           mode: "percent" as const,
           label: quotaTokenTypeLabel(windowGroup.tokenType),
-          windowMinutes: null,
+          windowMinutes: windowGroup.windowMinutes,
           windowStartedAt: syncedAt,
           resetsAt: windowGroup.resetMs === null ? null : new Date(windowGroup.resetMs).toISOString(),
-          resetMs: windowGroup.resetMs,
+          resetMs: windowGroup.resetKeyMs,
         };
       })
       .sort((left, right) => {
