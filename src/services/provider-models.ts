@@ -68,6 +68,59 @@ function errorMessage(error: unknown): string {
 export class ProviderModelsService {
   public constructor(private readonly config: AppConfig) {}
 
+  private extractUpstreamError(payload: unknown): string | null {
+    const root = asRecord(payload);
+    if (!root) {
+      return null;
+    }
+
+    const directMessage = asString(root.message);
+    const errorValue = root.error;
+    if (typeof errorValue === "string") {
+      return asString(errorValue);
+    }
+
+    const errorRecord = asRecord(errorValue);
+    if (!errorRecord) {
+      return directMessage;
+    }
+
+    const message = asString(errorRecord.message);
+    const status = asString(errorRecord.status);
+    let reason: string | null = null;
+
+    for (const detail of asArray(errorRecord.details)) {
+      const detailRecord = asRecord(detail);
+      if (!detailRecord) {
+        continue;
+      }
+
+      const detailReason = asString(detailRecord.reason);
+      if (detailReason) {
+        reason = detailReason;
+        break;
+      }
+
+      const metadata = asRecord(detailRecord.metadata);
+      const metadataReason = metadata ? asString(metadata.reason) : null;
+      if (metadataReason) {
+        reason = metadataReason;
+        break;
+      }
+    }
+
+    const summary = message ?? directMessage ?? status;
+    if (!summary) {
+      return reason;
+    }
+
+    if (reason && !summary.includes(reason)) {
+      return `${summary} (${reason})`;
+    }
+
+    return summary;
+  }
+
   public async fetchConnectedProviderModels(
     accounts: ConnectedAccount[],
   ): Promise<ConnectedProviderModelsPayload> {
@@ -230,6 +283,13 @@ export class ProviderModelsService {
             ...this.baseJsonHeaders(),
             Authorization: `Bearer ${accessToken}`,
           };
+
+    if (authMethod === "oauth") {
+      const billingProjectId = account.providerAccountId.trim();
+      if (billingProjectId.length > 0) {
+        headers["x-goog-user-project"] = billingProjectId;
+      }
+    }
 
     let nativeError: Error | null = null;
     try {
@@ -396,14 +456,36 @@ export class ProviderModelsService {
       },
     );
 
+    const responseBody = await response.text();
+    let payload: unknown;
+
+    try {
+      payload = responseBody.length > 0 ? (JSON.parse(responseBody) as unknown) : null;
+    } catch {
+      if (!response.ok) {
+        const snippet = responseBody.trim().slice(0, 200);
+        if (snippet.length > 0) {
+          throw new Error(`status ${response.status}: ${snippet}`);
+        }
+        throw new Error(`status ${response.status}`);
+      }
+
+      throw new Error("invalid JSON response");
+    }
+
     if (!response.ok) {
+      const detail = this.extractUpstreamError(payload);
+      if (detail) {
+        throw new Error(`status ${response.status}: ${detail}`);
+      }
+
       throw new Error(`status ${response.status}`);
     }
 
-    try {
-      return (await response.json()) as unknown;
-    } catch {
+    if (payload === null) {
       throw new Error("invalid JSON response");
     }
+
+    return payload;
   }
 }
