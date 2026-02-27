@@ -9,6 +9,8 @@ import { resilientFetch } from "./http-resilience";
 
 const PROVIDER_ORDER: ProviderId[] = ["codex", "gemini", "claude", "openrouter"];
 const CODEX_MODELS_CLIENT_VERSION = "0.99.0";
+const GEMINI_CODE_ASSIST_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const GEMINI_CODE_ASSIST_API_VERSION = "v1internal";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -67,6 +69,14 @@ function errorMessage(error: unknown): string {
 
 export class ProviderModelsService {
   public constructor(private readonly config: AppConfig) {}
+
+  private geminiCodeAssistQuotaEndpoint(): string {
+    const baseUrl = asString(process.env.CODE_ASSIST_ENDPOINT) ?? GEMINI_CODE_ASSIST_BASE_URL;
+    const apiVersion = asString(process.env.CODE_ASSIST_API_VERSION) ?? GEMINI_CODE_ASSIST_API_VERSION;
+    const normalizedBase = baseUrl.replace(/\/+$/, "");
+    const normalizedVersion = apiVersion.replace(/^\/+|\/+$/g, "");
+    return `${normalizedBase}/${normalizedVersion}:retrieveUserQuota`;
+  }
 
   private extractUpstreamError(payload: unknown): string | null {
     const root = asRecord(payload);
@@ -273,9 +283,68 @@ export class ProviderModelsService {
     return sortModelIds(modelIds);
   }
 
+  private extractGeminiCodeAssistModelIds(payload: unknown): string[] {
+    const root = asRecord(payload);
+    if (!root) {
+      return [];
+    }
+
+    const modelIds = new Set<string>();
+    for (const bucket of asArray(root.buckets)) {
+      const record = asRecord(bucket);
+      if (!record) {
+        continue;
+      }
+
+      const rawModelId = asString(record.modelId ?? record.model_id);
+      if (!rawModelId) {
+        continue;
+      }
+
+      const normalizedCandidate = rawModelId.endsWith("_vertex")
+        ? rawModelId.slice(0, rawModelId.length - "_vertex".length)
+        : rawModelId;
+      const normalized = normalizeModelId(normalizedCandidate);
+      if (normalized) {
+        modelIds.add(normalized);
+      }
+    }
+
+    return sortModelIds(modelIds);
+  }
+
+  private async fetchGeminiOauthModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
+    const endpoint = this.geminiCodeAssistQuotaEndpoint();
+    const headers: Record<string, string> = {
+      ...this.baseJsonHeaders(),
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+    const projectId = account.providerAccountId.trim();
+    const body = projectId.length > 0 ? { project: projectId } : {};
+    const payload = await this.requestJson(endpoint, headers, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return this.extractGeminiCodeAssistModelIds(payload);
+  }
+
   private async fetchGeminiModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
     const authMethod = account.authMethod ?? "oauth";
     const modelIds = new Set<string>();
+    let codeAssistError: Error | null = null;
+
+    if (authMethod === "oauth") {
+      try {
+        const oauthModels = await this.fetchGeminiOauthModels(account, accessToken);
+        if (oauthModels.length > 0) {
+          return oauthModels;
+        }
+      } catch (error) {
+        codeAssistError = error instanceof Error ? error : new Error("request failed");
+      }
+    }
+
     const headers =
       authMethod === "api"
         ? this.baseJsonHeaders()
@@ -330,6 +399,10 @@ export class ProviderModelsService {
 
     const sortedModelIds = sortModelIds(modelIds);
     if (sortedModelIds.length === 0) {
+      if (codeAssistError) {
+        throw codeAssistError;
+      }
+
       if (nativeError) {
         throw nativeError;
       }
@@ -442,11 +515,25 @@ export class ProviderModelsService {
   }
 
   private async fetchJson(endpoint: string, headers: Record<string, string>): Promise<unknown> {
+    return this.requestJson(endpoint, headers, {
+      method: "GET",
+    });
+  }
+
+  private async requestJson(
+    endpoint: string,
+    headers: Record<string, string>,
+    request: {
+      method: "GET" | "POST";
+      body?: string;
+    },
+  ): Promise<unknown> {
     const response = await resilientFetch(
       endpoint,
       {
-        method: "GET",
+        method: request.method,
         headers,
+        body: request.body,
       },
       {
         timeoutMs: 12_000,
