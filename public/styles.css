@@ -754,6 +754,10 @@ body.accounts-density-comfortable .account-card {
   gap: 6px;
 }
 
+.account-quotas-clean.single-window {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .quota-clean-block {
   display: flex;
   flex-direction: column;

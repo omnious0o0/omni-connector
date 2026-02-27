@@ -901,7 +901,16 @@ function formatResetRelativeTime(resetIso) {
 }
 
 function formatRechargeLine(resetIso) {
-  return formatResetRelativeTime(resetIso);
+  const relative = formatResetRelativeTime(resetIso);
+  if (relative === "time unavailable") {
+    return "Reset time unavailable";
+  }
+
+  if (relative === "now") {
+    return "Resets now";
+  }
+
+  return `Resets ${relative}`;
 }
 
 function parseIsoMs(value) {
@@ -950,45 +959,153 @@ function compactDurationLabel(durationMs) {
   return `${weeks}w`;
 }
 
-function quotaWindowLabel(windowData, fallbackLabel) {
+function windowLabelForKey(windowKey) {
+  return windowKey === "fiveHour" ? "Window A" : "Window B";
+}
+
+function nearestDurationMs(valueMs, candidatesMs) {
+  if (!Number.isFinite(valueMs) || valueMs <= 0 || !Array.isArray(candidatesMs) || candidatesMs.length === 0) {
+    return null;
+  }
+
+  let winner = null;
+  let smallestDelta = Number.POSITIVE_INFINITY;
+  for (const candidateMs of candidatesMs) {
+    if (!Number.isFinite(candidateMs) || candidateMs <= 0) {
+      continue;
+    }
+
+    const delta = Math.abs(candidateMs - valueMs);
+    if (delta < smallestDelta) {
+      winner = candidateMs;
+      smallestDelta = delta;
+    }
+  }
+
+  return winner;
+}
+
+function inferredScheduleDurationMs(windowData) {
   const startedAtMs = parseIsoMs(windowData?.windowStartedAt);
   const resetAtMs = parseIsoMs(windowData?.resetsAt);
 
   if (!Number.isNaN(startedAtMs) && !Number.isNaN(resetAtMs) && resetAtMs > startedAtMs) {
-    const durationLabel = compactDurationLabel(resetAtMs - startedAtMs);
-    if (durationLabel) {
-      return durationLabel;
-    }
+    const windowDurationMs = resetAtMs - startedAtMs;
+    return nearestDurationMs(windowDurationMs, [
+      60 * 60 * 1000,
+      5 * 60 * 60 * 1000,
+      24 * 60 * 60 * 1000,
+      7 * 24 * 60 * 60 * 1000,
+      30 * 24 * 60 * 60 * 1000,
+    ]);
   }
 
   if (!Number.isNaN(resetAtMs)) {
-    const remainingLabel = compactDurationLabel(resetAtMs - Date.now());
-    if (remainingLabel) {
-      return remainingLabel;
-    }
+    const remainingMs = resetAtMs - Date.now();
+    return nearestDurationMs(remainingMs, [
+      24 * 60 * 60 * 1000,
+      7 * 24 * 60 * 60 * 1000,
+      30 * 24 * 60 * 60 * 1000,
+    ]);
+  }
+
+  return null;
+}
+
+function quotaWindowScheduleLabel(windowData, fallbackLabel) {
+  const scheduleDurationMs = inferredScheduleDurationMs(windowData);
+  const durationLabel = compactDurationLabel(scheduleDurationMs ?? Number.NaN);
+  if (durationLabel) {
+    return `Every ${durationLabel}`;
   }
 
   return fallbackLabel;
 }
 
-function windowLabelForKey(windowKey) {
-  return windowKey === "fiveHour" ? "Window A" : "Window B";
+function buildQuotaWindowView(windowData, fallbackLabel) {
+  const presentation = quotaWindowPresentation(windowData);
+  const scheduleDurationMs = inferredScheduleDurationMs(windowData);
+  const limit = Number(windowData?.limit);
+  const used = Number(windowData?.used);
+  const remaining = Number(windowData?.remaining);
+  const safeLimit = Number.isFinite(limit) ? limit : 0;
+  const safeUsed = Number.isFinite(used) ? used : 0;
+  const safeRemaining = Number.isFinite(remaining) ? remaining : Math.max(safeLimit - safeUsed, 0);
+
+  return {
+    ...presentation,
+    label: quotaWindowScheduleLabel(windowData, fallbackLabel),
+    scheduleDurationMs: Number.isFinite(scheduleDurationMs) ? scheduleDurationMs : null,
+    limit: safeLimit,
+    used: safeUsed,
+    remaining: safeRemaining,
+  };
 }
 
-function accountStateIndicator(account, fiveHour, weekly, fiveHourLabel, weeklyLabel) {
+function quotaWindowSignature(windowView) {
+  const scheduleKey =
+    Number.isFinite(windowView.scheduleDurationMs) && windowView.scheduleDurationMs !== null
+      ? Math.round(windowView.scheduleDurationMs / 60_000)
+      : "na";
+  const resetKey = typeof windowView.resetAt === "string" ? windowView.resetAt : "na";
+  const ratioKey = Math.round(windowView.ratio * 1000);
+  const limitKey = Math.round(windowView.limit * 1000);
+  const usedKey = Math.round(windowView.used * 1000);
+  return `${scheduleKey}|${resetKey}|${ratioKey}|${limitKey}|${usedKey}`;
+}
+
+function normalizedAccountQuotaWindows(account) {
+  const candidates = [
+    buildQuotaWindowView(account?.quota?.fiveHour, windowLabelForKey("fiveHour")),
+    buildQuotaWindowView(account?.quota?.weekly, windowLabelForKey("weekly")),
+  ];
+
+  const seen = new Set();
+  const deduped = [];
+  for (const windowView of candidates) {
+    const signature = quotaWindowSignature(windowView);
+    if (seen.has(signature)) {
+      continue;
+    }
+
+    seen.add(signature);
+    deduped.push(windowView);
+  }
+
+  return deduped.sort((left, right) => {
+    const leftDuration = left.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER;
+    const rightDuration = right.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER;
+    return leftDuration - rightDuration;
+  });
+}
+
+function accountStateIndicator(account, quotaWindows) {
   if (account.quotaSyncStatus !== "live") {
     return { className: "is-red", label: "Offline" };
   }
 
-  if (weekly.ratio <= 0) {
-    return { className: "is-red", label: `${weeklyLabel} exhausted` };
+  if (!Array.isArray(quotaWindows) || quotaWindows.length === 0) {
+    return { className: "is-green", label: "Online" };
   }
 
-  if (fiveHour.ratio <= 0) {
-    return { className: "is-orange", label: `Recharging ${fiveHourLabel}` };
+  const exhaustedWindows = quotaWindows.filter((windowView) => windowView.ratio <= 0);
+  if (exhaustedWindows.length === 0) {
+    return { className: "is-green", label: "Online" };
   }
 
-  return { className: "is-green", label: "Online" };
+  const orderedByDuration = [...quotaWindows].sort((left, right) => {
+    const leftDuration = left.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER;
+    const rightDuration = right.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER;
+    return leftDuration - rightDuration;
+  });
+
+  const longestWindow = orderedByDuration[orderedByDuration.length - 1] ?? exhaustedWindows[0];
+  if (longestWindow.ratio <= 0) {
+    return { className: "is-red", label: `${longestWindow.label} exhausted` };
+  }
+
+  const rechargingWindow = orderedByDuration.find((windowView) => windowView.ratio <= 0) ?? exhaustedWindows[0];
+  return { className: "is-orange", label: `Recharging ${rechargingWindow.label}` };
 }
 
 function providerVisualIdentity(providerValue) {
@@ -1083,23 +1200,10 @@ function updateMetricText(selector, text) {
   }
 }
 
-function resolveDashboardWindowLabel(accounts, windowKey) {
-  const fallbackLabel = windowLabelForKey(windowKey);
-  if (!Array.isArray(accounts) || accounts.length === 0) {
-    return fallbackLabel;
-  }
-
-  const counts = new Map();
-  for (const account of accounts) {
-    const label = quotaWindowLabel(account?.quota?.[windowKey], fallbackLabel);
-    const normalizedLabel =
-      typeof label === "string" && label.trim().length > 0 ? label.trim() : fallbackLabel;
-    counts.set(normalizedLabel, (counts.get(normalizedLabel) ?? 0) + 1);
-  }
-
+function mostFrequentLabel(labelCounts, fallbackLabel) {
   let winner = fallbackLabel;
   let winnerCount = -1;
-  for (const [label, count] of counts.entries()) {
+  for (const [label, count] of labelCounts.entries()) {
     if (count > winnerCount) {
       winner = label;
       winnerCount = count;
@@ -1109,57 +1213,112 @@ function resolveDashboardWindowLabel(accounts, windowKey) {
   return winner;
 }
 
-function updateMetricWindowLabels(accounts) {
-  const firstLabel = resolveDashboardWindowLabel(accounts, "fiveHour");
-  const secondLabel = resolveDashboardWindowLabel(accounts, "weekly");
+function buildDashboardWindowMetrics(accounts) {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return [];
+  }
 
+  const buckets = new Map();
+  for (const account of accounts) {
+    const windows = normalizedAccountQuotaWindows(account);
+    for (const windowView of windows) {
+      const scheduleDurationMs =
+        Number.isFinite(windowView.scheduleDurationMs) && windowView.scheduleDurationMs !== null
+          ? Math.round(windowView.scheduleDurationMs)
+          : null;
+      const scheduleKey =
+        scheduleDurationMs !== null ? `duration:${scheduleDurationMs}` : `label:${windowView.label}`;
+
+      let bucket = buckets.get(scheduleKey);
+      if (!bucket) {
+        bucket = {
+          scheduleDurationMs,
+          labelCounts: new Map(),
+          totalLimit: 0,
+          totalRemaining: 0,
+          ratioSum: 0,
+          ratioCount: 0,
+        };
+        buckets.set(scheduleKey, bucket);
+      }
+
+      bucket.labelCounts.set(windowView.label, (bucket.labelCounts.get(windowView.label) ?? 0) + 1);
+      const limit = Number(windowView.limit);
+      const remaining = Number(windowView.remaining);
+      const ratio = clampRatio(Number(windowView.ratio));
+      if (Number.isFinite(limit) && limit > 0 && Number.isFinite(remaining)) {
+        bucket.totalLimit += limit;
+        bucket.totalRemaining += Math.max(Math.min(remaining, limit), 0);
+      }
+
+      bucket.ratioSum += ratio;
+      bucket.ratioCount += 1;
+    }
+  }
+
+  return [...buckets.values()]
+    .map((bucket) => {
+      const remainingPercent =
+        bucket.totalLimit > 0
+          ? Math.max(Math.min((bucket.totalRemaining / bucket.totalLimit) * 100, 100), 0)
+          : bucket.ratioCount > 0
+            ? Math.max(Math.min((bucket.ratioSum / bucket.ratioCount) * 100, 100), 0)
+            : 0;
+
+      return {
+        label: mostFrequentLabel(bucket.labelCounts, "Window"),
+        scheduleDurationMs: bucket.scheduleDurationMs,
+        remainingPercent,
+        usedPercent: 100 - remainingPercent,
+      };
+    })
+    .sort((left, right) => {
+      const leftDuration = left.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER;
+      const rightDuration = right.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER;
+      return leftDuration - rightDuration;
+    });
+}
+
+function updateMetricWindowLabels(primaryMetric, secondaryMetric) {
+  const primaryLabel = primaryMetric?.label ?? "Window A";
+  const secondaryLabel = secondaryMetric?.label ?? "Window B";
   if (metricWindowALabelElement instanceof HTMLElement) {
-    metricWindowALabelElement.textContent = `${firstLabel} Quota`;
+    metricWindowALabelElement.textContent = `${primaryLabel} Quota`;
   }
 
   if (metricWindowBLabelElement instanceof HTMLElement) {
-    metricWindowBLabelElement.textContent = `${secondLabel} Quota`;
+    metricWindowBLabelElement.textContent = `${secondaryLabel} Quota`;
   }
 }
 
-function aggregateRemainingPercent(accounts, windowKey) {
-  if (!Array.isArray(accounts) || accounts.length === 0) {
-    return 0;
+function renderDashboardQuotaMetrics(accounts) {
+  const metrics = buildDashboardWindowMetrics(accounts);
+  const primaryMetric = metrics[0] ?? null;
+  const secondaryMetric = metrics[1] ?? null;
+
+  updateMetricWindowLabels(primaryMetric, secondaryMetric);
+
+  if (primaryMetric) {
+    updateMetricText("#metric-five-hour", formatPercentValue(primaryMetric.remainingPercent));
+    updateMetricText(
+      "#metric-five-hour-detail",
+      `${formatPercentValue(primaryMetric.usedPercent)} used / 100% capacity`,
+    );
+  } else {
+    updateMetricText("#metric-five-hour", "N/A");
+    updateMetricText("#metric-five-hour-detail", "No live quota window");
   }
 
-  let totalRemaining = 0;
-  let totalLimit = 0;
-  let ratioSum = 0;
-  let ratioCount = 0;
-
-  for (const account of accounts) {
-    const windowData = account?.quota?.[windowKey];
-    if (!windowData) {
-      continue;
-    }
-
-    const limit = Number(windowData.limit);
-    const remaining = Number(windowData.remaining);
-    const ratio = clampRatio(Number(windowData.remainingRatio));
-
-    if (Number.isFinite(limit) && limit > 0 && Number.isFinite(remaining)) {
-      totalLimit += limit;
-      totalRemaining += Math.max(Math.min(remaining, limit), 0);
-    }
-
-    ratioSum += ratio;
-    ratioCount += 1;
+  if (secondaryMetric) {
+    updateMetricText("#metric-weekly", formatPercentValue(secondaryMetric.remainingPercent));
+    updateMetricText(
+      "#metric-weekly-detail",
+      `${formatPercentValue(secondaryMetric.usedPercent)} used / 100% capacity`,
+    );
+  } else {
+    updateMetricText("#metric-weekly", "N/A");
+    updateMetricText("#metric-weekly-detail", "No second quota window");
   }
-
-  if (totalLimit > 0) {
-    return Math.max(Math.min((totalRemaining / totalLimit) * 100, 100), 0);
-  }
-
-  if (ratioCount === 0) {
-    return 0;
-  }
-
-  return Math.max(Math.min((ratioSum / ratioCount) * 100, 100), 0);
 }
 
 async function request(path, options = {}) {
@@ -1221,6 +1380,25 @@ function applyQuotaFillWidths() {
   }
 }
 
+function renderQuotaWindowBlock(windowView) {
+  const isLow = windowView.ratio < 0.2;
+  const isCritical = windowView.ratio <= 0.01;
+  const rechargeLabel = formatRechargeLine(windowView.resetAt);
+  const fillPercent = Math.max(Math.min(Math.round(windowView.ratio * 100), 100), 0);
+  return `
+    <div class="quota-clean-block">
+      <div class="quota-clean-head">
+        <span class="quota-mini-label">${escapeHtml(windowView.label)}</span>
+        <span class="quota-mini-value">${escapeHtml(windowView.value)}</span>
+      </div>
+      <div class="quota-track" title="${escapeHtml(windowView.label)} reset ${escapeHtml(windowView.resetLabel)}">
+        <div class="quota-fill ${isCritical ? "critical" : isLow ? "warn" : ""}" data-fill="${fillPercent}"></div>
+      </div>
+      <p class="quota-recharge-line" title="${escapeHtml(windowView.label)} reset ${escapeHtml(windowView.resetLabel)}">${escapeHtml(rechargeLabel)}</p>
+    </div>
+  `;
+}
+
 function renderAccounts(accounts) {
   if (!accountsListElement) return;
 
@@ -1241,32 +1419,24 @@ function renderAccounts(accounts) {
   accountsListElement.classList.remove("is-empty");
   accountsListElement.classList.toggle("single-account", accounts.length === 1);
 
-  const cards = accounts.map((account) => {
-    const fiveHour = quotaWindowPresentation(account.quota.fiveHour);
-    const weekly = quotaWindowPresentation(account.quota.weekly);
-    const fiveHourLabel = quotaWindowLabel(account.quota.fiveHour, "Window A");
-    const weeklyLabel = quotaWindowLabel(account.quota.weekly, "Window B");
-    const fiveHourLow = fiveHour.ratio < 0.2;
-    const fiveHourCritical = fiveHour.ratio <= 0.01;
-    const weeklyLow = weekly.ratio < 0.2;
-    const weeklyCritical = weekly.ratio <= 0.01;
-    const accountTitle = maskDisplayName(account.displayName);
-    const providerIdentity = providerIdentityForAccount(account);
-    const fiveHourRecharge = formatRechargeLine(fiveHour.resetAt);
-    const weeklyRecharge = formatRechargeLine(weekly.resetAt);
-    const stateDot = accountStateIndicator(account, fiveHour, weekly, fiveHourLabel, weeklyLabel);
-    const syncError = typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
-    const showSyncError =
-      account.quotaSyncStatus !== "live" &&
-      syncError.length > 0;
-    const estimateNote = usageEstimateNote(account);
-    const errorLine = showSyncError ? `<div class="account-error-msg">${escapeHtml(syncError)}</div>` : "";
-    const estimateLine =
-      estimateNote && estimateNote.trim().length > 0
-        ? `<div class="account-note-msg">${escapeHtml(estimateNote)}</div>`
-        : "";
+  const cards = accounts
+    .map((account) => {
+      const quotaWindows = normalizedAccountQuotaWindows(account);
+      const accountTitle = maskDisplayName(account.displayName);
+      const providerIdentity = providerIdentityForAccount(account);
+      const stateDot = accountStateIndicator(account, quotaWindows);
+      const syncError = typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
+      const showSyncError = account.quotaSyncStatus !== "live" && syncError.length > 0;
+      const estimateNote = usageEstimateNote(account);
+      const errorLine = showSyncError ? `<div class="account-error-msg">${escapeHtml(syncError)}</div>` : "";
+      const estimateLine =
+        estimateNote && estimateNote.trim().length > 0
+          ? `<div class="account-note-msg">${escapeHtml(estimateNote)}</div>`
+          : "";
+      const quotaBlocks = quotaWindows.map((windowView) => renderQuotaWindowBlock(windowView)).join("");
+      const quotaGridClass = quotaWindows.length === 1 ? "account-quotas-clean single-window" : "account-quotas-clean";
 
-    return `
+      return `
       <article class="account-card">
         <header class="account-top-row">
           <div class="account-actions">
@@ -1286,28 +1456,8 @@ function renderAccounts(accounts) {
           </div>
         </header>
 
-        <div class="account-quotas-clean">
-          <div class="quota-clean-block">
-            <div class="quota-clean-head">
-              <span class="quota-mini-label">${escapeHtml(fiveHourLabel)}</span>
-              <span class="quota-mini-value">${escapeHtml(fiveHour.value)}</span>
-            </div>
-            <div class="quota-track" title="${escapeHtml(fiveHourLabel)} reset ${escapeHtml(fiveHour.resetLabel)}">
-              <div class="quota-fill ${fiveHourCritical ? "critical" : fiveHourLow ? "warn" : ""}" data-fill="${Math.max(Math.min(Math.round(fiveHour.ratio * 100), 100), 0)}"></div>
-            </div>
-            <p class="quota-recharge-line" title="${escapeHtml(fiveHourLabel)} reset ${escapeHtml(fiveHour.resetLabel)}">${escapeHtml(fiveHourRecharge)}</p>
-          </div>
-
-          <div class="quota-clean-block">
-            <div class="quota-clean-head">
-              <span class="quota-mini-label">${escapeHtml(weeklyLabel)}</span>
-              <span class="quota-mini-value">${escapeHtml(weekly.value)}</span>
-            </div>
-            <div class="quota-track" title="${escapeHtml(weeklyLabel)} reset ${escapeHtml(weekly.resetLabel)}">
-              <div class="quota-fill ${weeklyCritical ? "critical" : weeklyLow ? "warn" : ""}" data-fill="${Math.max(Math.min(Math.round(weekly.ratio * 100), 100), 0)}"></div>
-            </div>
-            <p class="quota-recharge-line" title="${escapeHtml(weeklyLabel)} reset ${escapeHtml(weekly.resetLabel)}">${escapeHtml(weeklyRecharge)}</p>
-          </div>
+        <div class="${quotaGridClass}">
+          ${quotaBlocks}
         </div>
 
         <div class="account-provider-row">
@@ -1338,7 +1488,8 @@ function renderAccounts(accounts) {
         ${estimateLine}
       </article>
     `;
-  }).join("");
+    })
+    .join("");
 
   accountsListElement.innerHTML = cards;
   applyQuotaFillWidths();
@@ -1472,22 +1623,7 @@ function renderDashboard(data) {
 
   setConnectorControlsEnabled(dashboardAuthorized);
 
-  const fiveHourPercent = aggregateRemainingPercent(data.accounts, "fiveHour");
-  const weeklyPercent = aggregateRemainingPercent(data.accounts, "weekly");
-  const fiveHourUsedPercent = data.accounts.length > 0 ? 100 - fiveHourPercent : 0;
-  const weeklyUsedPercent = data.accounts.length > 0 ? 100 - weeklyPercent : 0;
-
-  updateMetricWindowLabels(data.accounts);
-  updateMetricText("#metric-five-hour", formatPercentValue(fiveHourPercent));
-  updateMetricText(
-    "#metric-five-hour-detail",
-    `${formatPercentValue(fiveHourUsedPercent)} used / 100% capacity`,
-  );
-  updateMetricText("#metric-weekly", formatPercentValue(weeklyPercent));
-  updateMetricText(
-    "#metric-weekly-detail",
-    `${formatPercentValue(weeklyUsedPercent)} used / 100% capacity`,
-  );
+  renderDashboardQuotaMetrics(data.accounts);
 
   updateMetricText("#metric-account-count", formatNumber(data.accounts.length));
 
@@ -1877,8 +2013,9 @@ function openAccountSettingsModal(accountId) {
     accountSettingsDisplayNameInput.value = account.displayName;
   }
 
-  const accountFiveHourLabel = quotaWindowLabel(account?.quota?.fiveHour, "Window A");
-  const accountWeeklyLabel = quotaWindowLabel(account?.quota?.weekly, "Window B");
+  const accountWindows = normalizedAccountQuotaWindows(account);
+  const accountFiveHourLabel = accountWindows[0]?.label ?? windowLabelForKey("fiveHour");
+  const accountWeeklyLabel = accountWindows[1]?.label ?? windowLabelForKey("weekly");
   if (accountSettingsFiveHourLabel instanceof HTMLElement) {
     accountSettingsFiveHourLabel.textContent = `Manual ${accountFiveHourLabel} limit`;
   }
