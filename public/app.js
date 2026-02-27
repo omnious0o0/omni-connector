@@ -996,10 +996,10 @@ function quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt) {
   }
 
   if (typeof windowData?.resetsAt === "string" && windowData.resetsAt.trim().length > 0) {
-    return "Reset-based schedule";
+    return `Resets ${formatResetTime(windowData.resetsAt)}`;
   }
 
-  return "Schedule unavailable";
+  return "";
 }
 
 function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
@@ -1251,7 +1251,7 @@ function buildDashboardWindowMetrics(accounts) {
             : 0;
 
       return {
-        label: mostFrequentLabel(bucket.labelCounts, "Window"),
+        label: mostFrequentLabel(bucket.labelCounts, ""),
         scheduleDurationMs: bucket.scheduleDurationMs,
         remainingPercent,
         usedPercent: 100 - remainingPercent,
@@ -1265,14 +1265,14 @@ function buildDashboardWindowMetrics(accounts) {
 }
 
 function updateMetricWindowLabels(primaryMetric, secondaryMetric) {
-  const primaryLabel = primaryMetric?.label ?? "Quota schedule";
-  const secondaryLabel = secondaryMetric?.label ?? "Secondary schedule";
+  const primaryLabel = typeof primaryMetric?.label === "string" ? primaryMetric.label.trim() : "";
+  const secondaryLabel = typeof secondaryMetric?.label === "string" ? secondaryMetric.label.trim() : "";
   if (metricWindowALabelElement instanceof HTMLElement) {
-    metricWindowALabelElement.textContent = `${primaryLabel} Quota`;
+    metricWindowALabelElement.textContent = primaryLabel.length > 0 ? `${primaryLabel} Quota` : "";
   }
 
   if (metricWindowBLabelElement instanceof HTMLElement) {
-    metricWindowBLabelElement.textContent = `${secondaryLabel} Quota`;
+    metricWindowBLabelElement.textContent = secondaryLabel.length > 0 ? `${secondaryLabel} Quota` : "";
   }
 }
 
@@ -1290,8 +1290,8 @@ function renderDashboardQuotaMetrics(accounts) {
       `${formatPercentValue(primaryMetric.usedPercent)} used / 100% capacity`,
     );
   } else {
-    updateMetricText("#metric-five-hour", "N/A");
-    updateMetricText("#metric-five-hour-detail", "No live quota window");
+    updateMetricText("#metric-five-hour", "");
+    updateMetricText("#metric-five-hour-detail", "");
   }
 
   if (secondaryMetric) {
@@ -1301,8 +1301,8 @@ function renderDashboardQuotaMetrics(accounts) {
       `${formatPercentValue(secondaryMetric.usedPercent)} used / 100% capacity`,
     );
   } else {
-    updateMetricText("#metric-weekly", "N/A");
-    updateMetricText("#metric-weekly-detail", "No second quota window");
+    updateMetricText("#metric-weekly", "");
+    updateMetricText("#metric-weekly-detail", "");
   }
 }
 
@@ -1999,8 +1999,8 @@ function openAccountSettingsModal(accountId) {
   }
 
   const accountWindows = normalizedAccountQuotaWindows(account);
-  const accountFiveHourLabel = accountWindows[0]?.label ?? "quota schedule";
-  const accountWeeklyLabel = accountWindows[1]?.label ?? "secondary quota schedule";
+  const accountFiveHourLabel = accountWindows[0]?.label?.trim() || "quota";
+  const accountWeeklyLabel = accountWindows[1]?.label?.trim() || accountFiveHourLabel;
   if (accountSettingsFiveHourLabel instanceof HTMLElement) {
     accountSettingsFiveHourLabel.textContent = `Manual ${accountFiveHourLabel} limit`;
   }
