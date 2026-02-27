@@ -959,10 +959,6 @@ function compactDurationLabel(durationMs) {
   return `${weeks}w`;
 }
 
-function windowLabelForKey(windowKey) {
-  return windowKey === "fiveHour" ? "Window A" : "Window B";
-}
-
 function isSyntheticWindowStart(windowData, quotaSyncedAt) {
   const windowStartedAtMs = parseIsoMs(windowData?.windowStartedAt);
   const syncedAtMs = parseIsoMs(quotaSyncedAt);
@@ -995,7 +991,15 @@ function quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt) {
     return `Every ${durationLabel}`;
   }
 
-  return fallbackLabel;
+  if (typeof fallbackLabel === "string" && fallbackLabel.trim().length > 0) {
+    return fallbackLabel.trim();
+  }
+
+  if (typeof windowData?.resetsAt === "string" && windowData.resetsAt.trim().length > 0) {
+    return "Reset-based schedule";
+  }
+
+  return "Schedule unavailable";
 }
 
 function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
@@ -1038,8 +1042,8 @@ function quotaWindowSignature(windowView) {
 function normalizedAccountQuotaWindows(account) {
   const quotaSyncedAt = typeof account?.quotaSyncedAt === "string" ? account.quotaSyncedAt : null;
   const candidates = [
-    buildQuotaWindowView(account?.quota?.fiveHour, windowLabelForKey("fiveHour"), quotaSyncedAt),
-    buildQuotaWindowView(account?.quota?.weekly, windowLabelForKey("weekly"), quotaSyncedAt),
+    buildQuotaWindowView(account?.quota?.fiveHour, null, quotaSyncedAt),
+    buildQuotaWindowView(account?.quota?.weekly, null, quotaSyncedAt),
   ];
 
   const seen = new Set();
@@ -1261,8 +1265,8 @@ function buildDashboardWindowMetrics(accounts) {
 }
 
 function updateMetricWindowLabels(primaryMetric, secondaryMetric) {
-  const primaryLabel = primaryMetric?.label ?? "Window A";
-  const secondaryLabel = secondaryMetric?.label ?? "Window B";
+  const primaryLabel = primaryMetric?.label ?? "Quota schedule";
+  const secondaryLabel = secondaryMetric?.label ?? "Secondary schedule";
   if (metricWindowALabelElement instanceof HTMLElement) {
     metricWindowALabelElement.textContent = `${primaryLabel} Quota`;
   }
@@ -1995,8 +1999,8 @@ function openAccountSettingsModal(accountId) {
   }
 
   const accountWindows = normalizedAccountQuotaWindows(account);
-  const accountFiveHourLabel = accountWindows[0]?.label ?? windowLabelForKey("fiveHour");
-  const accountWeeklyLabel = accountWindows[1]?.label ?? windowLabelForKey("weekly");
+  const accountFiveHourLabel = accountWindows[0]?.label ?? "quota schedule";
+  const accountWeeklyLabel = accountWindows[1]?.label ?? "secondary quota schedule";
   if (accountSettingsFiveHourLabel instanceof HTMLElement) {
     accountSettingsFiveHourLabel.textContent = `Manual ${accountFiveHourLabel} limit`;
   }
