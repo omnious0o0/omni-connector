@@ -62,7 +62,11 @@ const accountSettingsDisplayNameInput = document.querySelector("#account-setting
 const accountSettingsApiLimitsElement = document.querySelector("#account-settings-api-limits");
 const accountSettingsFiveHourInput = document.querySelector("#account-settings-5h");
 const accountSettingsWeeklyInput = document.querySelector("#account-settings-7d");
+const accountSettingsFiveHourLabel = document.querySelector('label[for="account-settings-5h"]');
+const accountSettingsWeeklyLabel = document.querySelector('label[for="account-settings-7d"]');
 const accountSettingsCancelButton = document.querySelector("#account-settings-cancel");
+const metricWindowALabelElement = document.querySelector("#metric-window-a-label");
+const metricWindowBLabelElement = document.querySelector("#metric-window-b-label");
 
 let dashboard = null;
 let toastTimer = null;
@@ -900,17 +904,88 @@ function formatRechargeLine(resetIso) {
   return formatResetRelativeTime(resetIso);
 }
 
-function accountStateIndicator(account, fiveHour, weekly) {
+function parseIsoMs(value) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return Number.NaN;
+  }
+
+  const timestampMs = Date.parse(value);
+  return Number.isFinite(timestampMs) ? timestampMs : Number.NaN;
+}
+
+function roundToNearest(value, step) {
+  if (!Number.isFinite(value) || !Number.isFinite(step) || step <= 0) {
+    return value;
+  }
+
+  return Math.round(value / step) * step;
+}
+
+function compactDurationLabel(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+
+  const minuteMs = 60_000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  const weekMs = 7 * dayMs;
+
+  if (durationMs < hourMs) {
+    const minutes = Math.max(1, roundToNearest(durationMs / minuteMs, 5));
+    return `${minutes}m`;
+  }
+
+  if (durationMs < 2 * dayMs) {
+    const hours = Math.max(1, roundToNearest(durationMs / hourMs, 1));
+    return `${hours}h`;
+  }
+
+  if (durationMs < 5 * weekMs) {
+    const days = Math.max(1, roundToNearest(durationMs / dayMs, 1));
+    return `${days}d`;
+  }
+
+  const weeks = Math.max(1, roundToNearest(durationMs / weekMs, 1));
+  return `${weeks}w`;
+}
+
+function quotaWindowLabel(windowData, fallbackLabel) {
+  const startedAtMs = parseIsoMs(windowData?.windowStartedAt);
+  const resetAtMs = parseIsoMs(windowData?.resetsAt);
+
+  if (!Number.isNaN(startedAtMs) && !Number.isNaN(resetAtMs) && resetAtMs > startedAtMs) {
+    const durationLabel = compactDurationLabel(resetAtMs - startedAtMs);
+    if (durationLabel) {
+      return durationLabel;
+    }
+  }
+
+  if (!Number.isNaN(resetAtMs)) {
+    const remainingLabel = compactDurationLabel(resetAtMs - Date.now());
+    if (remainingLabel) {
+      return remainingLabel;
+    }
+  }
+
+  return fallbackLabel;
+}
+
+function windowLabelForKey(windowKey) {
+  return windowKey === "fiveHour" ? "Window A" : "Window B";
+}
+
+function accountStateIndicator(account, fiveHour, weekly, fiveHourLabel, weeklyLabel) {
   if (account.quotaSyncStatus !== "live") {
     return { className: "is-red", label: "Offline" };
   }
 
   if (weekly.ratio <= 0) {
-    return { className: "is-red", label: "Weekly exhausted" };
+    return { className: "is-red", label: `${weeklyLabel} exhausted` };
   }
 
   if (fiveHour.ratio <= 0) {
-    return { className: "is-orange", label: "Recharging 5h" };
+    return { className: "is-orange", label: `Recharging ${fiveHourLabel}` };
   }
 
   return { className: "is-green", label: "Online" };
@@ -1005,6 +1080,45 @@ function updateMetricText(selector, text) {
   const element = document.querySelector(selector);
   if (element) {
     element.textContent = text;
+  }
+}
+
+function resolveDashboardWindowLabel(accounts, windowKey) {
+  const fallbackLabel = windowLabelForKey(windowKey);
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return fallbackLabel;
+  }
+
+  const counts = new Map();
+  for (const account of accounts) {
+    const label = quotaWindowLabel(account?.quota?.[windowKey], fallbackLabel);
+    const normalizedLabel =
+      typeof label === "string" && label.trim().length > 0 ? label.trim() : fallbackLabel;
+    counts.set(normalizedLabel, (counts.get(normalizedLabel) ?? 0) + 1);
+  }
+
+  let winner = fallbackLabel;
+  let winnerCount = -1;
+  for (const [label, count] of counts.entries()) {
+    if (count > winnerCount) {
+      winner = label;
+      winnerCount = count;
+    }
+  }
+
+  return winner;
+}
+
+function updateMetricWindowLabels(accounts) {
+  const firstLabel = resolveDashboardWindowLabel(accounts, "fiveHour");
+  const secondLabel = resolveDashboardWindowLabel(accounts, "weekly");
+
+  if (metricWindowALabelElement instanceof HTMLElement) {
+    metricWindowALabelElement.textContent = `${firstLabel} Quota`;
+  }
+
+  if (metricWindowBLabelElement instanceof HTMLElement) {
+    metricWindowBLabelElement.textContent = `${secondLabel} Quota`;
   }
 }
 
@@ -1130,6 +1244,8 @@ function renderAccounts(accounts) {
   const cards = accounts.map((account) => {
     const fiveHour = quotaWindowPresentation(account.quota.fiveHour);
     const weekly = quotaWindowPresentation(account.quota.weekly);
+    const fiveHourLabel = quotaWindowLabel(account.quota.fiveHour, "Window A");
+    const weeklyLabel = quotaWindowLabel(account.quota.weekly, "Window B");
     const fiveHourLow = fiveHour.ratio < 0.2;
     const fiveHourCritical = fiveHour.ratio <= 0.01;
     const weeklyLow = weekly.ratio < 0.2;
@@ -1138,7 +1254,7 @@ function renderAccounts(accounts) {
     const providerIdentity = providerIdentityForAccount(account);
     const fiveHourRecharge = formatRechargeLine(fiveHour.resetAt);
     const weeklyRecharge = formatRechargeLine(weekly.resetAt);
-    const stateDot = accountStateIndicator(account, fiveHour, weekly);
+    const stateDot = accountStateIndicator(account, fiveHour, weekly, fiveHourLabel, weeklyLabel);
     const syncError = typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
     const showSyncError =
       account.quotaSyncStatus !== "live" &&
@@ -1173,24 +1289,24 @@ function renderAccounts(accounts) {
         <div class="account-quotas-clean">
           <div class="quota-clean-block">
             <div class="quota-clean-head">
-              <span class="quota-mini-label">5h</span>
+              <span class="quota-mini-label">${escapeHtml(fiveHourLabel)}</span>
               <span class="quota-mini-value">${escapeHtml(fiveHour.value)}</span>
             </div>
-            <div class="quota-track" title="5h reset ${escapeHtml(fiveHour.resetLabel)}">
+            <div class="quota-track" title="${escapeHtml(fiveHourLabel)} reset ${escapeHtml(fiveHour.resetLabel)}">
               <div class="quota-fill ${fiveHourCritical ? "critical" : fiveHourLow ? "warn" : ""}" data-fill="${Math.max(Math.min(Math.round(fiveHour.ratio * 100), 100), 0)}"></div>
             </div>
-            <p class="quota-recharge-line" title="5h reset ${escapeHtml(fiveHour.resetLabel)}">${escapeHtml(fiveHourRecharge)}</p>
+            <p class="quota-recharge-line" title="${escapeHtml(fiveHourLabel)} reset ${escapeHtml(fiveHour.resetLabel)}">${escapeHtml(fiveHourRecharge)}</p>
           </div>
 
           <div class="quota-clean-block">
             <div class="quota-clean-head">
-              <span class="quota-mini-label">Week</span>
+              <span class="quota-mini-label">${escapeHtml(weeklyLabel)}</span>
               <span class="quota-mini-value">${escapeHtml(weekly.value)}</span>
             </div>
-            <div class="quota-track" title="Weekly reset ${escapeHtml(weekly.resetLabel)}">
+            <div class="quota-track" title="${escapeHtml(weeklyLabel)} reset ${escapeHtml(weekly.resetLabel)}">
               <div class="quota-fill ${weeklyCritical ? "critical" : weeklyLow ? "warn" : ""}" data-fill="${Math.max(Math.min(Math.round(weekly.ratio * 100), 100), 0)}"></div>
             </div>
-            <p class="quota-recharge-line" title="Weekly reset ${escapeHtml(weekly.resetLabel)}">${escapeHtml(weeklyRecharge)}</p>
+            <p class="quota-recharge-line" title="${escapeHtml(weeklyLabel)} reset ${escapeHtml(weekly.resetLabel)}">${escapeHtml(weeklyRecharge)}</p>
           </div>
         </div>
 
@@ -1361,6 +1477,7 @@ function renderDashboard(data) {
   const fiveHourUsedPercent = data.accounts.length > 0 ? 100 - fiveHourPercent : 0;
   const weeklyUsedPercent = data.accounts.length > 0 ? 100 - weeklyPercent : 0;
 
+  updateMetricWindowLabels(data.accounts);
   updateMetricText("#metric-five-hour", formatPercentValue(fiveHourPercent));
   updateMetricText(
     "#metric-five-hour-detail",
@@ -1758,6 +1875,16 @@ function openAccountSettingsModal(accountId) {
 
   if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
     accountSettingsDisplayNameInput.value = account.displayName;
+  }
+
+  const accountFiveHourLabel = quotaWindowLabel(account?.quota?.fiveHour, "Window A");
+  const accountWeeklyLabel = quotaWindowLabel(account?.quota?.weekly, "Window B");
+  if (accountSettingsFiveHourLabel instanceof HTMLElement) {
+    accountSettingsFiveHourLabel.textContent = `Manual ${accountFiveHourLabel} limit`;
+  }
+
+  if (accountSettingsWeeklyLabel instanceof HTMLElement) {
+    accountSettingsWeeklyLabel.textContent = `Manual ${accountWeeklyLabel} limit`;
   }
 
   const canSetManualFallbackLimits =
