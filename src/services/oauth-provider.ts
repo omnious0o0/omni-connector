@@ -697,7 +697,7 @@ export class OAuthProviderService {
       accessToken: tokenPayload.accessToken,
       refreshToken: tokenPayload.refreshToken,
       tokenExpiresAt: tokenPayload.tokenExpiresAt,
-      quotaSyncedAt: nowIso,
+      quotaSyncedAt: null,
       quotaSyncStatus: fiveHourLimit > 0 && weeklyLimit > 0 ? "stale" : "unavailable",
       quotaSyncError: null,
       planType: null,

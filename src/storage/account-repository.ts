@@ -118,7 +118,7 @@ export class AccountRepository {
         existingAccount.accessToken = payload.accessToken;
         existingAccount.refreshToken = payload.refreshToken;
         existingAccount.tokenExpiresAt = payload.tokenExpiresAt;
-        existingAccount.quotaSyncedAt = payload.quotaSyncedAt ?? existingAccount.quotaSyncedAt ?? null;
+        existingAccount.quotaSyncedAt = payload.quotaSyncedAt ?? null;
         existingAccount.quotaSyncStatus =
           payload.quotaSyncStatus ?? existingAccount.quotaSyncStatus ?? "unavailable";
         existingAccount.quotaSyncError = payload.quotaSyncError ?? null;
@@ -237,7 +237,7 @@ export class AccountRepository {
         existingAccount.accessToken = apiKey;
         existingAccount.refreshToken = null;
         existingAccount.tokenExpiresAt = API_DEFAULT_TOKEN_EXPIRES_AT;
-        existingAccount.quotaSyncedAt = nowIso;
+        existingAccount.quotaSyncedAt = null;
         existingAccount.quotaSyncStatus = strictLiveQuota ? "unavailable" : "stale";
         existingAccount.quotaSyncError = null;
         existingAccount.planType = null;
@@ -288,7 +288,7 @@ export class AccountRepository {
         tokenExpiresAt: API_DEFAULT_TOKEN_EXPIRES_AT,
         createdAt: nowIso,
         updatedAt: nowIso,
-        quotaSyncedAt: nowIso,
+        quotaSyncedAt: null,
         quotaSyncStatus: strictLiveQuota ? "unavailable" : "stale",
         quotaSyncError: null,
         planType: null,

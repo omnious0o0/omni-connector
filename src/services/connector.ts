@@ -297,10 +297,15 @@ export class ConnectorService {
 
   public linkOAuthAccount(payload: OAuthLinkedAccountPayload): void {
     this.accounts.upsertOAuthAccount(payload);
+    void this.syncAccountStateNow();
   }
 
   public linkApiAccount(payload: ApiLinkedAccountPayload): void {
     this.accounts.upsertApiAccount(payload, this.strictLiveQuota);
+  }
+
+  public async syncAccountStateNow(): Promise<void> {
+    await this.syncAccountState();
   }
 
   public removeAccount(accountId: string): void {

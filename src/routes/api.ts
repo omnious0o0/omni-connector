@@ -372,7 +372,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
     });
   });
 
-  router.post("/accounts/link-api", (req, res) => {
+  router.post("/accounts/link-api", async (req, res) => {
     assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
     const payload = parseApiLinkBody(req.body);
 
@@ -387,6 +387,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
     }
 
     dependencies.connectorService.linkApiAccount(payload);
+    await dependencies.connectorService.syncAccountStateNow();
     res.status(201).json({
       ok: true,
     });
