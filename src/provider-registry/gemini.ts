@@ -25,7 +25,7 @@ const geminiProvider: ProviderModule = {
         tokenUrl: googleTokenUrl,
         userInfoUrl: googleUserInfoUrl,
         scopes:
-          "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/generative-language.retriever https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+          "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
         extraParams: {
           access_type: "offline",
           prompt: "consent",
@@ -42,7 +42,7 @@ const geminiProvider: ProviderModule = {
         tokenUrl: googleTokenUrl,
         userInfoUrl: googleUserInfoUrl,
         scopes:
-          "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/generative-language.retriever https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
+          "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
         extraParams: {
           access_type: "offline",
           prompt: "consent",
