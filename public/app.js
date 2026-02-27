@@ -769,12 +769,12 @@ function shouldRevealConnectorKey() {
 
 function maskSensitiveValue(value, start = 4, end = 3) {
   if (typeof value !== "string") {
-    return "N/A";
+    return "Unavailable";
   }
 
   const trimmed = value.trim();
   if (!trimmed) {
-    return "N/A";
+    return "Unavailable";
   }
 
   if (trimmed.length <= start + end) {
@@ -865,9 +865,9 @@ function formatConnectorKeyDisplay(keyValue) {
 }
 
 function formatResetTime(resetIso) {
-  if (!resetIso) return "N/A";
+  if (!resetIso) return "Unknown";
   const date = new Date(resetIso);
-  if (Number.isNaN(date.getTime())) return "N/A";
+  if (Number.isNaN(date.getTime())) return "Unknown";
   return date.toLocaleString();
 }
 
@@ -1199,7 +1199,7 @@ function quotaWindowPresentation(windowData) {
     }
 
     return {
-      value: "N/A",
+      value: "0%",
       detail: "Live usage unavailable",
       ratio: 0,
       resetLabel: "No live quota window",
@@ -1234,20 +1234,14 @@ function usageEstimateNote(account) {
     return null;
   }
 
-  const fiveHourLimit = Number(account?.quota?.fiveHour?.limit ?? 0);
-  const weeklyLimit = Number(account?.quota?.weekly?.limit ?? 0);
   const samples = Number(account?.estimatedUsageSampleCount ?? 0);
 
   if (samples <= 0) {
-    if (fiveHourLimit <= 0 || weeklyLimit <= 0) {
-      return "Usage estimate starts after the first routed request.";
-    }
-
     return null;
   }
 
   if (samples === 1) {
-    return "Usage estimate started from the first routed request. Accuracy improves as more requests are routed.";
+    return "Usage estimate is based on routed traffic and becomes more stable as more requests are routed.";
   }
 
   const accuracyPercent = estimateAccuracyPercent(samples);
@@ -2074,7 +2068,7 @@ function openAccountSettingsModal(accountId) {
   }
 
   if (accountSettingsOAuthProfileElement instanceof HTMLElement) {
-    accountSettingsOAuthProfileElement.textContent = account.oauthProfileId ?? "N/A";
+    accountSettingsOAuthProfileElement.textContent = account.oauthProfileId ?? "";
   }
 
   if (accountSettingsSyncStatusElement instanceof HTMLElement) {
