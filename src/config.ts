@@ -56,11 +56,13 @@ export interface AppConfig {
   codexAppServerCommand: string;
   codexAppServerArgs: string[];
   codexAppServerTimeoutMs: number;
+  codexChatgptBaseUrl: string;
   oauthRequireQuota: boolean;
   defaultFiveHourLimit: number;
   defaultWeeklyLimit: number;
   defaultFiveHourUsed: number;
   defaultWeeklyUsed: number;
+  providerInferenceBaseUrls: Record<ProviderId, string>;
   providerUsage: Record<ProviderId, ProviderUsageConfig>;
   oauthProfiles: Record<ProviderId, OAuthProviderProfileConfig[]>;
 }
@@ -793,6 +795,18 @@ function parseProviderUsageConfigMap(env: NodeJS.ProcessEnv): Record<ProviderId,
   return usageByProvider;
 }
 
+function parseProviderInferenceBaseUrls(env: NodeJS.ProcessEnv): Record<ProviderId, string> {
+  return {
+    codex: parseRequiredUrl(env.CODEX_INFERENCE_BASE_URL, "https://api.openai.com/v1"),
+    gemini: parseRequiredUrl(
+      env.GEMINI_INFERENCE_BASE_URL,
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    ),
+    claude: parseRequiredUrl(env.CLAUDE_INFERENCE_BASE_URL, "https://api.anthropic.com/v1"),
+    openrouter: parseRequiredUrl(env.OPENROUTER_INFERENCE_BASE_URL, "https://openrouter.ai/api/v1"),
+  };
+}
+
 function resolveSessionSecretFilePath(rawValue: string | undefined, dataFilePath: string): string {
   const configuredPath = rawValue?.trim();
   if (configuredPath) {
@@ -848,6 +862,11 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const host = parseHost(env.HOST);
   const allowRemoteDashboard = parseBoolean(env.ALLOW_REMOTE_DASHBOARD, false);
   const strictLiveQuota = parseBoolean(env.STRICT_LIVE_QUOTA, false);
+  const providerInferenceBaseUrls = parseProviderInferenceBaseUrls(env);
+  const codexChatgptBaseUrl = parseRequiredUrl(
+    env.CODEX_CHATGPT_BASE_URL,
+    "https://chatgpt.com/backend-api/codex",
+  );
   const providerUsage = parseProviderUsageConfigMap(env);
   const oauthProfiles = parseOAuthProfiles(env);
   const defaultRedirectUri = `http://localhost:${port}/auth/callback`;
@@ -885,16 +904,18 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     oauthClientId: nonEmptyEnvValue(env.OAUTH_CLIENT_ID) ?? "app_EMoamEEZ73f0CkXaXp7hrann",
     oauthClientSecret: nonEmptyEnvValue(env.OAUTH_CLIENT_SECRET) ?? "",
     oauthScopes: parseScopes(nonEmptyEnvValue(env.OAUTH_SCOPES) ?? undefined),
-    oauthOriginator: nonEmptyEnvValue(env.OAUTH_ORIGINATOR) ?? "pi",
+    oauthOriginator: nonEmptyEnvValue(env.OAUTH_ORIGINATOR) ?? "codex_cli_rs",
     codexAppServerEnabled: parseBoolean(env.CODEX_APP_SERVER_ENABLED, true),
     codexAppServerCommand: nonEmptyEnvValue(env.CODEX_APP_SERVER_COMMAND) ?? "codex",
     codexAppServerArgs: parseCommandArgs(env.CODEX_APP_SERVER_ARGS, ["app-server"]),
     codexAppServerTimeoutMs: parsePositiveInt(env.CODEX_APP_SERVER_TIMEOUT_MS, 3500),
+    codexChatgptBaseUrl,
     oauthRequireQuota: parseBoolean(env.OAUTH_REQUIRE_QUOTA, true),
     defaultFiveHourLimit: parseNonNegativeInt(env.DEFAULT_FIVE_HOUR_LIMIT, 0),
     defaultWeeklyLimit: parseNonNegativeInt(env.DEFAULT_WEEKLY_LIMIT, 0),
     defaultFiveHourUsed: parseNonNegativeInt(env.DEFAULT_FIVE_HOUR_USED, 0),
     defaultWeeklyUsed: parseNonNegativeInt(env.DEFAULT_WEEKLY_USED, 0),
+    providerInferenceBaseUrls,
     providerUsage,
     oauthProfiles,
   };

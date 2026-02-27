@@ -423,6 +423,413 @@ async function linkOAuthAccount(
     .expect("location", "/?connected=1");
 }
 
+async function startMockModelsServer(): Promise<{
+  baseUrl: string;
+  close: () => Promise<void>;
+}> {
+  const server = http.createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const host = request.headers.host ?? "127.0.0.1";
+    const url = new URL(request.url ?? "/", `http://${host}`);
+
+    if (method === "GET" && url.pathname === "/v1/models") {
+      const authorization = request.headers.authorization;
+      if (authorization !== "Bearer codex-models-key") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          object: "list",
+          data: [
+            { id: "zeta-exact-001" },
+            { id: "alpha-exact-002" },
+            { id: "alpha-exact-002" },
+          ],
+        }),
+      );
+      return;
+    }
+
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
+
+  const addressInfo = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${addressInfo.port}`,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function startMockCodexOauthModelsServer(): Promise<{
+  baseUrl: string;
+  getCounts: () => { codexModels: number; backendModels: number; v1Models: number };
+  close: () => Promise<void>;
+}> {
+  const counts = {
+    codexModels: 0,
+    backendModels: 0,
+    v1Models: 0,
+  };
+
+  const server = http.createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const host = request.headers.host ?? "127.0.0.1";
+    const url = new URL(request.url ?? "/", `http://${host}`);
+
+    if (method === "GET" && url.pathname === "/backend-api/codex/models") {
+      counts.codexModels += 1;
+      const authorization = request.headers.authorization;
+      const accountHeader = request.headers["chatgpt-account-id"];
+      const accountId = Array.isArray(accountHeader) ? accountHeader[0] : accountHeader;
+      const clientVersion = url.searchParams.get("client_version");
+
+      if (authorization !== "Bearer oauth-models-token") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unauthorized" } }));
+        return;
+      }
+
+      if (accountId !== "workspace-models") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "wrong_account" } }));
+        return;
+      }
+
+      if (!clientVersion) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "missing client_version" } }));
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          models: [
+            {
+              slug: "gpt-5.3-codex",
+              supported_in_api: true,
+              visibility: "list",
+            },
+            {
+              slug: "chatgpt_alpha_model_external_access_reserved_gate_13",
+              supported_in_api: false,
+              visibility: "list",
+            },
+            {
+              slug: "gpt-5.1-codex-mini",
+              supported_in_api: true,
+              visibility: "list",
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/backend-api/models") {
+      counts.backendModels += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          data: [{ slug: "stale-backend-model" }],
+        }),
+      );
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/v1/models") {
+      counts.v1Models += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          data: [{ id: "stale-openai-model" }],
+        }),
+      );
+      return;
+    }
+
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
+
+  const addressInfo = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${addressInfo.port}`,
+    getCounts: () => ({ ...counts }),
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function startMockGeminiOauthModelsServer(): Promise<{
+  baseUrl: string;
+  getCounts: () => { quotaModels: number; nativeModels: number; openAiModels: number };
+  close: () => Promise<void>;
+}> {
+  const counts = {
+    quotaModels: 0,
+    nativeModels: 0,
+    openAiModels: 0,
+  };
+
+  const server = http.createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const host = request.headers.host ?? "127.0.0.1";
+    const url = new URL(request.url ?? "/", `http://${host}`);
+
+    if (method === "POST" && url.pathname === "/v1internal:retrieveUserQuota") {
+      counts.quotaModels += 1;
+      const authorization = request.headers.authorization;
+      if (authorization !== "Bearer gemini-oauth-models-token") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unauthorized" } }));
+        return;
+      }
+
+      const rawBody = await readRequestBody(request);
+      const parsedBody = rawBody.trim().length > 0 ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+      if (parsedBody.project !== "gemini-models-project") {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "missing project" } }));
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          buckets: [
+            { modelId: "gemini-2.5-pro" },
+            { modelId: "gemini-2.5-pro_vertex" },
+            { modelId: "gemini-2.5-flash" },
+            { modelId: "gemini-3-pro-preview_vertex" },
+            { modelId: "gemini-2.5-flash" },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/v1beta/models") {
+      counts.nativeModels += 1;
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: {
+            code: 403,
+            message: "Request had insufficient authentication scopes.",
+            status: "PERMISSION_DENIED",
+          },
+        }),
+      );
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/v1beta/openai/models") {
+      counts.openAiModels += 1;
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "unauthorized" } }));
+      return;
+    }
+
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
+
+  const addressInfo = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${addressInfo.port}`,
+    getCounts: () => ({ ...counts }),
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function startMockGeminiQuotaBootstrapServer(options: {
+  bootstrapEnablesQuota: boolean;
+}): Promise<{
+  baseUrl: string;
+  getCounts: () => { retrieveUserQuota: number; loadCodeAssist: number };
+  close: () => Promise<void>;
+}> {
+  const counts = {
+    retrieveUserQuota: 0,
+    loadCodeAssist: 0,
+  };
+
+  let codeAssistLoaded = false;
+  const discoveredProjectId = "gemini-bootstrap-project";
+
+  const validationRequiredPayload = {
+    error: {
+      code: 403,
+      message: "Verify your account to continue.",
+      status: "PERMISSION_DENIED",
+      details: [
+        { reason: "VALIDATION_REQUIRED" },
+        {
+          "@type": "type.googleapis.com/google.rpc.Help",
+          links: [
+            {
+              url: "https://support.google.com/code/answer/170248?hl=en",
+              description: "Verify your account",
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const server = http.createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const host = request.headers.host ?? "127.0.0.1";
+    const url = new URL(request.url ?? "/", `http://${host}`);
+
+    if (method === "POST" && url.pathname === "/v1internal:loadCodeAssist") {
+      counts.loadCodeAssist += 1;
+      const authorization = request.headers.authorization;
+      if (authorization !== "Bearer gemini-bootstrap-token") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unauthorized" } }));
+        return;
+      }
+
+      codeAssistLoaded = true;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          projectId: discoveredProjectId,
+          cloudaicompanionProject: {
+            id: discoveredProjectId,
+          },
+        }),
+      );
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/v1internal:retrieveUserQuota") {
+      counts.retrieveUserQuota += 1;
+      const authorization = request.headers.authorization;
+      if (authorization !== "Bearer gemini-bootstrap-token") {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unauthorized" } }));
+        return;
+      }
+
+      const rawBody = await readRequestBody(request);
+      const parsedBody = rawBody.trim().length > 0 ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+      const project = typeof parsedBody.project === "string" ? parsedBody.project : "";
+
+      if (!codeAssistLoaded || !options.bootstrapEnablesQuota) {
+        response.writeHead(403, { "content-type": "application/json" });
+        response.end(JSON.stringify(validationRequiredPayload));
+        return;
+      }
+
+      if (project !== discoveredProjectId) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "missing project" } }));
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          buckets: [
+            {
+              modelId: "gemini-2.5-pro",
+              remainingFraction: 0.8,
+              resetTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+              tokenType: "REQUESTS",
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
+
+  const addressInfo = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${addressInfo.port}`,
+    getCounts: () => ({ ...counts }),
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    },
+  };
+}
+
 test("supports codex OAuth start route alias", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer();
@@ -460,6 +867,55 @@ test("supports codex OAuth start route alias", async () => {
 
     assert.equal(dashboard.body.accounts.length, 1);
     assert.equal(dashboard.body.accounts[0]?.provider, "codex");
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("uses canonical localhost codex redirect_uri", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 1455,
+      host: "127.0.0.1",
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthRedirectUri: "http://localhost:1455/auth/callback",
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const asIpv4Host = await supertest(app)
+      .get("/auth/omni/start")
+      .set("Host", "127.0.0.1:1455")
+      .expect(302);
+    const ipv4AuthorizationUrl = new URL(asIpv4Host.header.location as string);
+    assert.equal(
+      ipv4AuthorizationUrl.searchParams.get("redirect_uri"),
+      "http://localhost:1455/auth/callback",
+    );
+
+    const asLocalhost = await supertest(app)
+      .get("/auth/omni/start")
+      .set("Host", "localhost:1455")
+      .expect(302);
+    const localhostAuthorizationUrl = new URL(asLocalhost.header.location as string);
+    assert.equal(
+      localhostAuthorizationUrl.searchParams.get("redirect_uri"),
+      "http://localhost:1455/auth/callback",
+    );
   } finally {
     await mockOAuth.close();
     temp.cleanup();
@@ -605,6 +1061,92 @@ test("rejects OAuth callback without matching session cookie", async () => {
   }
 });
 
+test("surfaces OAuth provider callback error code and description", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/auth/callback")
+      .query({
+        error: "access_denied",
+        error_description: "Missing api.responses.write scope",
+      })
+      .expect(400)
+      .expect("OAuth provider returned an error (access_denied): Missing api.responses.write scope");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("sanitizes OAuth provider callback error details", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/auth/callback")
+      .query({
+        error: "INVALID REQUEST !!!",
+        error_description: "line-1\nline-2\tline-3",
+      })
+      .expect(400)
+      .expect("OAuth provider returned an error (invalid_request): line-1 line-2 line-3");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("uses explicit provider_error code when OAuth callback error code is blank", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/auth/callback")
+      .query({
+        error: "",
+      })
+      .expect(400)
+      .expect("OAuth provider returned an error (provider_error).");
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("connects gemini through both OAuth options (Gemini CLI and Antigravity)", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer({ expectedClientId: "gemini-client-id" });
@@ -703,6 +1245,176 @@ test("connects gemini through both OAuth options (Gemini CLI and Antigravity)", 
     await agent.get("/auth/gemini/start?profile=antigravity").expect(302);
   } finally {
     await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("saves connector routing preferences and persists them", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+
+    const initialDashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    assert.deepEqual(initialDashboard.body.connector.routingPreferences, {
+      preferredProvider: "auto",
+      fallbackProviders: [],
+      priorityModels: ["auto"],
+    });
+
+    const nextRoutingPreferences = {
+      preferredProvider: "gemini",
+      fallbackProviders: ["codex", "claude"],
+      priorityModels: ["gemini/gemini-2.5-pro", "openrouter/deepseek-r1"],
+    };
+
+    const updateResponse = await agent
+      .post("/api/connector/routing")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send(nextRoutingPreferences)
+      .expect(200);
+    assert.deepEqual(updateResponse.body.routingPreferences, nextRoutingPreferences);
+
+    const fetchResponse = await agent
+      .get("/api/connector/routing")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    assert.deepEqual(fetchResponse.body.routingPreferences, nextRoutingPreferences);
+
+    const dashboardAfter = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    assert.deepEqual(dashboardAfter.body.connector.routingPreferences, nextRoutingPreferences);
+
+    const persistedRaw = JSON.parse(fs.readFileSync(temp.dataFilePath, "utf8")) as {
+      connector: {
+        routingPreferences: {
+          preferredProvider: string;
+          fallbackProviders: string[];
+          priorityModels: string[];
+        };
+      };
+    };
+    assert.deepEqual(persistedRaw.connector.routingPreferences, nextRoutingPreferences);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("routes with preferred provider, fallback order, and model hint override", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "codex",
+        displayName: "Codex API",
+        providerAccountId: "codex-priority",
+        apiKey: "codex-priority-key",
+      })
+      .expect(201);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini API",
+        providerAccountId: "gemini-priority",
+        apiKey: "gemini-priority-key",
+      })
+      .expect(201);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "claude",
+        displayName: "Claude API",
+        providerAccountId: "claude-priority",
+        apiKey: "claude-priority-key",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const connectorKey = dashboard.body.connector.apiKey as string;
+
+    await agent
+      .post("/api/connector/routing")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        preferredProvider: "openrouter",
+        fallbackProviders: ["claude", "gemini", "codex"],
+        priorityModels: ["auto"],
+      })
+      .expect(200);
+
+    const fallbackRoute = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 1 })
+      .expect(200);
+    assert.equal(fallbackRoute.body.routedTo.provider, "claude");
+
+    await agent
+      .post("/api/connector/routing")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        preferredProvider: "gemini",
+        fallbackProviders: ["claude", "codex"],
+        priorityModels: ["auto"],
+      })
+      .expect(200);
+
+    const preferredRoute = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 1 })
+      .expect(200);
+    assert.equal(preferredRoute.body.routedTo.provider, "gemini");
+
+    const modelHintRoute = await agent
+      .post("/api/connector/route")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({ units: 1, model: "codex" })
+      .expect(200);
+    assert.equal(modelHintRoute.body.routedTo.provider, "codex");
+  } finally {
     temp.cleanup();
   }
 });
@@ -806,6 +1518,355 @@ test("estimates Gemini OAuth usage when live usage data is unavailable", async (
   }
 });
 
+test("auto-bootstraps Gemini Code Assist and retries quota sync after validation required", async () => {
+  const temp = createTempDataPath();
+  const mockQuotaServer = await startMockGeminiQuotaBootstrapServer({
+    bootstrapEnablesQuota: true,
+  });
+  const previousCodeAssistEndpoint = process.env.CODE_ASSIST_ENDPOINT;
+  const previousCodeAssistApiVersion = process.env.CODE_ASSIST_API_VERSION;
+  process.env.CODE_ASSIST_ENDPOINT = mockQuotaServer.baseUrl;
+  process.env.CODE_ASSIST_API_VERSION = "v1internal";
+
+  try {
+    const now = new Date().toISOString();
+    const seededStore = {
+      connector: {
+        apiKey: "omni_seeded_bootstrap_key",
+        createdAt: now,
+        lastRotatedAt: now,
+        routingPreferences: {
+          preferredProvider: "auto",
+          fallbackProviders: [],
+          priorityModels: ["auto"],
+        },
+      },
+      accounts: [
+        {
+          id: "acc_gemini_bootstrap",
+          provider: "gemini",
+          authMethod: "oauth",
+          oauthProfileId: "gemini-cli",
+          providerAccountId: "gemini-prebootstrap-project",
+          chatgptAccountId: null,
+          displayName: "Gemini Bootstrap",
+          accessToken: "gemini-bootstrap-token",
+          refreshToken: "gemini-bootstrap-refresh",
+          tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          createdAt: now,
+          updatedAt: now,
+          quotaSyncedAt: null,
+          quotaSyncStatus: "unavailable",
+          quotaSyncError: null,
+          planType: null,
+          creditsBalance: null,
+          quota: {
+            fiveHour: {
+              limit: 0,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+            weekly: {
+              limit: 0,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+          },
+        },
+      ],
+    };
+    fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await agent.get("/api/dashboard").set(DASHBOARD_CLIENT_HEADER).expect(200);
+    const dashboard = await agent.get("/api/dashboard").set(DASHBOARD_CLIENT_HEADER).expect(200);
+
+    const account = dashboard.body.accounts[0] as {
+      quotaSyncStatus: string;
+      quotaSyncError: string | null;
+      quotaSyncIssue: unknown;
+      quota: {
+        fiveHour: { mode?: string; limit: number; used: number };
+      };
+    };
+
+    assert.equal(account.quotaSyncStatus, "live");
+    assert.equal(account.quotaSyncError, null);
+    assert.equal(account.quotaSyncIssue, null);
+    assert.equal(account.quota.fiveHour.mode, "percent");
+    assert.equal(account.quota.fiveHour.limit, 100);
+    assert.equal(account.quota.fiveHour.used, 20);
+
+    const counts = mockQuotaServer.getCounts();
+    assert.equal(counts.loadCodeAssist, 1);
+    assert.equal(counts.retrieveUserQuota >= 3, true);
+  } finally {
+    if (previousCodeAssistEndpoint === undefined) {
+      delete process.env.CODE_ASSIST_ENDPOINT;
+    } else {
+      process.env.CODE_ASSIST_ENDPOINT = previousCodeAssistEndpoint;
+    }
+
+    if (previousCodeAssistApiVersion === undefined) {
+      delete process.env.CODE_ASSIST_API_VERSION;
+    } else {
+      process.env.CODE_ASSIST_API_VERSION = previousCodeAssistApiVersion;
+    }
+
+    await mockQuotaServer.close();
+    temp.cleanup();
+  }
+});
+
+test("adds actionable validation guidance when Gemini quota stays blocked after bootstrap", async () => {
+  const temp = createTempDataPath();
+  const mockQuotaServer = await startMockGeminiQuotaBootstrapServer({
+    bootstrapEnablesQuota: false,
+  });
+  const previousCodeAssistEndpoint = process.env.CODE_ASSIST_ENDPOINT;
+  const previousCodeAssistApiVersion = process.env.CODE_ASSIST_API_VERSION;
+  process.env.CODE_ASSIST_ENDPOINT = mockQuotaServer.baseUrl;
+  process.env.CODE_ASSIST_API_VERSION = "v1internal";
+
+  try {
+    const now = new Date().toISOString();
+    const seededStore = {
+      connector: {
+        apiKey: "omni_seeded_validation_key",
+        createdAt: now,
+        lastRotatedAt: now,
+        routingPreferences: {
+          preferredProvider: "auto",
+          fallbackProviders: [],
+          priorityModels: ["auto"],
+        },
+      },
+      accounts: [
+        {
+          id: "acc_gemini_validation_required",
+          provider: "gemini",
+          authMethod: "oauth",
+          oauthProfileId: "gemini-cli",
+          providerAccountId: "gemini-validation-project",
+          chatgptAccountId: null,
+          displayName: "Gemini Validation",
+          accessToken: "gemini-bootstrap-token",
+          refreshToken: "gemini-bootstrap-refresh",
+          tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          createdAt: now,
+          updatedAt: now,
+          quotaSyncedAt: null,
+          quotaSyncStatus: "unavailable",
+          quotaSyncError: null,
+          planType: null,
+          creditsBalance: null,
+          quota: {
+            fiveHour: {
+              limit: 0,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+            weekly: {
+              limit: 0,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+          },
+        },
+      ],
+    };
+    fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await agent.get("/api/dashboard").set(DASHBOARD_CLIENT_HEADER).expect(200);
+    const dashboard = await agent.get("/api/dashboard").set(DASHBOARD_CLIENT_HEADER).expect(200);
+
+    const account = dashboard.body.accounts[0] as {
+      quotaSyncStatus: string;
+      quotaSyncError: string | null;
+      quotaSyncIssue: {
+        kind?: string;
+        title?: string;
+        steps?: string[];
+        actionLabel?: string;
+        actionUrl?: string;
+      } | null;
+    };
+
+    assert.equal(account.quotaSyncStatus, "unavailable");
+    assert.match(String(account.quotaSyncError ?? ""), /VALIDATION_REQUIRED/i);
+    assert.match(
+      String(account.quotaSyncError ?? ""),
+      /Complete account verification in Google Gemini Code Assist and retry\./i,
+    );
+    assert.equal(account.quotaSyncIssue?.kind, "account_verification_required");
+    assert.equal(account.quotaSyncIssue?.actionLabel, "Verify account");
+    assert.equal(account.quotaSyncIssue?.actionUrl?.startsWith("https://"), true);
+    assert.equal(Array.isArray(account.quotaSyncIssue?.steps), true);
+    assert.equal((account.quotaSyncIssue?.steps?.length ?? 0) >= 3, true);
+
+    const counts = mockQuotaServer.getCounts();
+    assert.equal(counts.loadCodeAssist, 1);
+    assert.equal(counts.retrieveUserQuota >= 5, true);
+  } finally {
+    if (previousCodeAssistEndpoint === undefined) {
+      delete process.env.CODE_ASSIST_ENDPOINT;
+    } else {
+      process.env.CODE_ASSIST_ENDPOINT = previousCodeAssistEndpoint;
+    }
+
+    if (previousCodeAssistApiVersion === undefined) {
+      delete process.env.CODE_ASSIST_API_VERSION;
+    } else {
+      process.env.CODE_ASSIST_API_VERSION = previousCodeAssistApiVersion;
+    }
+
+    await mockQuotaServer.close();
+    temp.cleanup();
+  }
+});
+
+test("opens verification helper and returns to dashboard after completion", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const now = new Date().toISOString();
+    const seededStore = {
+      connector: {
+        apiKey: "omni_seeded_verification_return_key",
+        createdAt: now,
+        lastRotatedAt: now,
+        routingPreferences: {
+          preferredProvider: "auto",
+          fallbackProviders: [],
+          priorityModels: ["auto"],
+        },
+      },
+      accounts: [
+        {
+          id: "acc_verification_route",
+          provider: "gemini",
+          authMethod: "oauth",
+          oauthProfileId: "gemini-cli",
+          providerAccountId: "gemini-verification-route",
+          chatgptAccountId: null,
+          displayName: "Gemini Verification Route",
+          accessToken: "gemini-verification-token",
+          refreshToken: "gemini-verification-refresh",
+          tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          createdAt: now,
+          updatedAt: now,
+          quotaSyncedAt: now,
+          quotaSyncStatus: "unavailable",
+          quotaSyncError: "Live quota sync failed: status 403.",
+          quotaSyncIssue: {
+            kind: "account_verification_required",
+            title: "Account verification required",
+            steps: [
+              "Open the Google verification page.",
+              "Finish verification with the same Google account you connected here.",
+              "Return here and refresh your dashboard.",
+            ],
+            actionLabel: "Verify account",
+            actionUrl: "https://support.google.com/code/answer/170248?hl=en",
+          },
+          planType: null,
+          creditsBalance: null,
+          quota: {
+            fiveHour: {
+              limit: 0,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+            weekly: {
+              limit: 0,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+          },
+        },
+      ],
+    };
+    fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    const launch = await agent
+      .get("/verification/start")
+      .query({ accountId: "acc_verification_route" })
+      .expect(200)
+      .expect("content-type", /html/);
+
+    assert.match(launch.text, /Finish account verification/i);
+    assert.match(launch.text, /Open verification page/i);
+    const stateMatch = launch.text.match(/\/verification\/complete\?state=([^"<\s]+)/i);
+    assert.ok(stateMatch);
+    const encodedState = stateMatch?.[1] ?? "";
+    const state = decodeURIComponent(encodedState);
+
+    const completion = await agent
+      .get("/verification/complete")
+      .query({ state })
+      .expect(302);
+    assert.equal(completion.headers.location, "/?verified=1");
+
+    const completionReplay = await agent
+      .get("/verification/complete")
+      .query({ state })
+      .expect(302);
+    assert.equal(completionReplay.headers.location, "/?verified=1");
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("connects account through external OAuth provider and routes by connector key", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer();
@@ -840,7 +1901,7 @@ test("connects account through external OAuth provider and routes by connector k
       .expect(200);
     assert.equal(dashboardBefore.body.dashboardAuthorized, true);
     assert.equal(dashboardBefore.body.accounts.length, 0);
-    assert.match(dashboardBefore.body.connector.apiKey as string, /^cxk_/);
+    assert.match(dashboardBefore.body.connector.apiKey as string, /^omni-/);
 
     const oauthStart = await agent.get("/auth/omni/start").expect(302);
     const authorizationLocation = oauthStart.header.location;
@@ -850,6 +1911,12 @@ test("connects account through external OAuth provider and routes by connector k
     assert.equal(authorizationUrl.pathname, "/oauth/authorize");
     assert.equal(authorizationUrl.searchParams.get("response_type"), "code");
     assert.equal(authorizationUrl.searchParams.get("client_id"), OPENAI_CODEX_CLIENT_ID);
+    const redirectUri = authorizationUrl.searchParams.get("redirect_uri");
+    assert.ok(redirectUri);
+    const redirectUrl = new URL(redirectUri);
+    assert.equal(redirectUrl.hostname, "localhost");
+    assert.equal(redirectUrl.pathname, "/auth/callback");
+    assert.ok(redirectUrl.port.length > 0);
     assert.equal(authorizationUrl.searchParams.get("code_challenge_method"), "S256");
     assert.equal(authorizationUrl.searchParams.get("codex_cli_simplified_flow"), "true");
 
@@ -859,10 +1926,13 @@ test("connects account through external OAuth provider and routes by connector k
     assert.ok(callbackLocation);
 
     const callbackUrl = new URL(callbackLocation);
-    await agent
+    const callbackResponse = await agent
       .get(`${callbackUrl.pathname}${callbackUrl.search}`)
-      .expect(302)
-      .expect("location", "/?connected=1");
+      .redirects(1)
+      .expect(200)
+      .expect("content-type", /html/);
+    assert.equal(callbackResponse.redirects.some((redirectUrl) => redirectUrl.endsWith("/?connected=1")), true);
+    assert.match(callbackResponse.text, /<title>omni-connector<\/title>/i);
 
     const dashboardAfter = await agent
       .get("/api/dashboard")
@@ -871,7 +1941,7 @@ test("connects account through external OAuth provider and routes by connector k
     assert.equal(dashboardAfter.body.dashboardAuthorized, true);
     assert.equal(dashboardAfter.body.accounts.length, 1);
     const initialConnectorKey = dashboardAfter.body.connector.apiKey as string;
-    assert.match(initialConnectorKey, /^cxk_/);
+    assert.match(initialConnectorKey, /^omni-/);
     assert.equal(dashboardAfter.body.accounts[0]?.provider, "codex");
     assert.equal(dashboardAfter.body.accounts[0]?.quota.fiveHour.limit, 100);
     assert.equal(dashboardAfter.body.accounts[0]?.quota.fiveHour.used, 21);
@@ -2154,7 +3224,7 @@ test("requires dashboard client header for dashboard and mutations", async () =>
     assert.deepEqual(dashboard.body.totals, {
       fiveHourLimit: 100,
       fiveHourUsed: 10,
-      fiveHourRemaining: 80,
+      fiveHourRemaining: 90,
       weeklyLimit: 100,
       weeklyUsed: 20,
       weeklyRemaining: 80,
@@ -2166,7 +3236,7 @@ test("requires dashboard client header for dashboard and mutations", async () =>
       .post("/api/connector/key/rotate")
       .set(DASHBOARD_CLIENT_HEADER)
       .expect(200);
-    assert.match(rotateResponse.body.apiKey as string, /^cxk_/);
+    assert.match(rotateResponse.body.apiKey as string, /^omni-/);
     assert.notEqual(rotateResponse.body.apiKey as string, "cxk_seeded_test_key");
 
     await supertest(app).post("/api/accounts/acc_seeded/remove").expect(403);
@@ -2182,6 +3252,308 @@ test("requires dashboard client header for dashboard and mutations", async () =>
       .expect(200);
     assert.equal(dashboardAfter.body.accounts.length, 0);
   } finally {
+    temp.cleanup();
+  }
+});
+
+test("returns connected provider model IDs from live provider responses", async () => {
+  const temp = createTempDataPath();
+  const mockModelsServer = await startMockModelsServer();
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerInferenceBaseUrls: {
+        ...defaults.providerInferenceBaseUrls,
+        codex: `${mockModelsServer.baseUrl}/v1`,
+      },
+    });
+
+    const agent = supertest.agent(app);
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "codex",
+        apiKey: "codex-models-key",
+        providerAccountId: "models-acc",
+        displayName: "Codex Models",
+      })
+      .expect(201);
+
+    await supertest(app).get("/api/models/connected").expect(403);
+
+    const modelsResponse = await agent
+      .get("/api/models/connected")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const providers = modelsResponse.body.providers as Array<{
+      provider: string;
+      accountCount: number;
+      status: string;
+      modelIds: string[];
+      syncError: string | null;
+    }>;
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0]?.provider, "codex");
+    assert.equal(providers[0]?.accountCount, 1);
+    assert.equal(providers[0]?.status, "live");
+    assert.deepEqual(providers[0]?.modelIds, ["alpha-exact-002", "zeta-exact-001"]);
+    assert.equal(providers[0]?.syncError, null);
+  } finally {
+    await mockModelsServer.close();
+    temp.cleanup();
+  }
+});
+
+test("uses codex oauth scoped model endpoint and filters unsupported model IDs", async () => {
+  const temp = createTempDataPath();
+  const mockModelsServer = await startMockCodexOauthModelsServer();
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+    const now = new Date().toISOString();
+    const seededStore = {
+      connector: {
+        apiKey: "omni_seeded_models_key",
+        createdAt: now,
+        lastRotatedAt: now,
+        routingPreferences: {
+          preferredProvider: "auto",
+          fallbackProviders: [],
+          priorityModels: ["auto"],
+        },
+      },
+      accounts: [
+        {
+          id: "acc_oauth_models",
+          provider: "codex",
+          authMethod: "oauth",
+          oauthProfileId: "oauth",
+          providerAccountId: "oauth-models-account",
+          chatgptAccountId: "workspace-models",
+          displayName: "OAuth Models",
+          accessToken: "oauth-models-token",
+          refreshToken: "oauth-refresh-token",
+          tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          createdAt: now,
+          updatedAt: now,
+          quotaSyncedAt: now,
+          quotaSyncStatus: "stale",
+          quotaSyncError: null,
+          planType: null,
+          creditsBalance: null,
+          quota: {
+            fiveHour: {
+              limit: 1000,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+            weekly: {
+              limit: 7000,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+          },
+        },
+      ],
+    };
+    fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      codexChatgptBaseUrl: `${mockModelsServer.baseUrl}/backend-api/codex`,
+      providerInferenceBaseUrls: {
+        ...defaults.providerInferenceBaseUrls,
+        codex: `${mockModelsServer.baseUrl}/v1`,
+      },
+    });
+
+    const modelsResponse = await supertest(app)
+      .get("/api/models/connected")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const providers = modelsResponse.body.providers as Array<{
+      provider: string;
+      accountCount: number;
+      status: string;
+      modelIds: string[];
+      syncError: string | null;
+    }>;
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0]?.provider, "codex");
+    assert.equal(providers[0]?.accountCount, 1);
+    assert.equal(providers[0]?.status, "live");
+    assert.deepEqual(providers[0]?.modelIds, ["gpt-5.1-codex-mini", "gpt-5.3-codex"]);
+    assert.equal(providers[0]?.syncError, null);
+
+    const counts = mockModelsServer.getCounts();
+    assert.equal(counts.codexModels, 1);
+    assert.equal(counts.backendModels, 0);
+    assert.equal(counts.v1Models, 0);
+  } finally {
+    await mockModelsServer.close();
+    temp.cleanup();
+  }
+});
+
+test("uses Gemini OAuth quota endpoint to return accessible model IDs", async () => {
+  const temp = createTempDataPath();
+  const mockModelsServer = await startMockGeminiOauthModelsServer();
+  const previousCodeAssistEndpoint = process.env.CODE_ASSIST_ENDPOINT;
+  const previousCodeAssistApiVersion = process.env.CODE_ASSIST_API_VERSION;
+  process.env.CODE_ASSIST_ENDPOINT = mockModelsServer.baseUrl;
+  process.env.CODE_ASSIST_API_VERSION = "v1internal";
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+    const now = new Date().toISOString();
+    const seededStore = {
+      connector: {
+        apiKey: "omni_seeded_models_key",
+        createdAt: now,
+        lastRotatedAt: now,
+        routingPreferences: {
+          preferredProvider: "auto",
+          fallbackProviders: [],
+          priorityModels: ["auto"],
+        },
+      },
+      accounts: [
+        {
+          id: "acc_gemini_oauth_models",
+          provider: "gemini",
+          authMethod: "oauth",
+          oauthProfileId: "gemini-cli",
+          providerAccountId: "gemini-models-project",
+          chatgptAccountId: null,
+          displayName: "Gemini OAuth Models",
+          accessToken: "gemini-oauth-models-token",
+          refreshToken: "gemini-refresh-token",
+          tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          createdAt: now,
+          updatedAt: now,
+          quotaSyncedAt: now,
+          quotaSyncStatus: "stale",
+          quotaSyncError: null,
+          planType: null,
+          creditsBalance: null,
+          quota: {
+            fiveHour: {
+              limit: 1000,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+            weekly: {
+              limit: 7000,
+              used: 0,
+              mode: "units",
+              windowStartedAt: now,
+              resetsAt: null,
+            },
+          },
+        },
+      ],
+    };
+    fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerInferenceBaseUrls: {
+        ...defaults.providerInferenceBaseUrls,
+        gemini: `${mockModelsServer.baseUrl}/v1beta/openai`,
+      },
+    });
+
+    const modelsResponse = await supertest(app)
+      .get("/api/models/connected")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const providers = modelsResponse.body.providers as Array<{
+      provider: string;
+      accountCount: number;
+      status: string;
+      modelIds: string[];
+      syncError: string | null;
+    }>;
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0]?.provider, "gemini");
+    assert.equal(providers[0]?.accountCount, 1);
+    assert.equal(providers[0]?.status, "live");
+    assert.deepEqual(providers[0]?.modelIds, ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro-preview"]);
+    assert.equal(providers[0]?.syncError, null);
+
+    const counts = mockModelsServer.getCounts();
+    assert.equal(counts.quotaModels, 1);
+    assert.equal(counts.nativeModels, 0);
+    assert.equal(counts.openAiModels, 0);
+  } finally {
+    if (previousCodeAssistEndpoint === undefined) {
+      delete process.env.CODE_ASSIST_ENDPOINT;
+    } else {
+      process.env.CODE_ASSIST_ENDPOINT = previousCodeAssistEndpoint;
+    }
+
+    if (previousCodeAssistApiVersion === undefined) {
+      delete process.env.CODE_ASSIST_API_VERSION;
+    } else {
+      process.env.CODE_ASSIST_API_VERSION = previousCodeAssistApiVersion;
+    }
+
+    await mockModelsServer.close();
     temp.cleanup();
   }
 });
@@ -2218,7 +3590,7 @@ test("persists connector and oauth tokens encrypted at rest", async () => {
       .set(DASHBOARD_CLIENT_HEADER)
       .expect(200);
     const connectorKey = dashboard.body.connector.apiKey as string;
-    assert.match(connectorKey, /^cxk_/);
+    assert.match(connectorKey, /^omni-/);
 
     const persistedRaw = JSON.parse(fs.readFileSync(temp.dataFilePath, "utf8")) as {
       connector: {

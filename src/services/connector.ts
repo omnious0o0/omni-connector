@@ -8,6 +8,7 @@ import {
   DashboardPayload,
   DashboardTotals,
   OAuthLinkedAccountPayload,
+  QuotaSyncIssue,
   ProviderId,
   RoutingPreferences,
   RouteDecision,
@@ -175,6 +176,54 @@ function syncErrorDetail(error: unknown, fallback: string): string {
   return redactSensitiveLogText(fallback);
 }
 
+function isQuotaSyncIssue(value: unknown): value is QuotaSyncIssue {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as Partial<QuotaSyncIssue>;
+  if (candidate.kind !== "account_verification_required") {
+    return false;
+  }
+
+  if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
+    return false;
+  }
+
+  if (!Array.isArray(candidate.steps) || candidate.steps.some((step) => typeof step !== "string" || step.trim().length === 0)) {
+    return false;
+  }
+
+  if (typeof candidate.actionLabel !== "string" || candidate.actionLabel.trim().length === 0) {
+    return false;
+  }
+
+  if (typeof candidate.actionUrl !== "string" || candidate.actionUrl.trim().length === 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function quotaSyncIssueFromError(error: unknown): QuotaSyncIssue | null {
+  if (!(error instanceof HttpError) || !error.context || typeof error.context !== "object") {
+    return null;
+  }
+
+  const issue = (error.context as Record<string, unknown>).quotaSyncIssue;
+  if (!isQuotaSyncIssue(issue)) {
+    return null;
+  }
+
+  return {
+    kind: issue.kind,
+    title: issue.title.trim(),
+    steps: issue.steps.map((step) => step.trim()).filter((step) => step.length > 0),
+    actionLabel: issue.actionLabel.trim(),
+    actionUrl: issue.actionUrl.trim(),
+  };
+}
+
 function isLegacyGeminiPlaceholderQuota(account: ConnectedAccount): boolean {
   if (account.provider !== "gemini" || (account.authMethod ?? "oauth") !== "oauth") {
     return false;
@@ -248,6 +297,7 @@ function applyEstimatedUsage(account: ConnectedAccount, units: number, nowIso: s
   account.estimatedUsageUpdatedAt = nowIso;
   account.quotaSyncStatus = "stale";
   account.quotaSyncError = null;
+  account.quotaSyncIssue = null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -302,6 +352,20 @@ export class ConnectorService {
 
   public linkApiAccount(payload: ApiLinkedAccountPayload): void {
     this.accounts.upsertApiAccount(payload, this.strictLiveQuota);
+  }
+
+  public quotaSyncIssueForAccount(accountId: string): QuotaSyncIssue | null {
+    const normalizedAccountId = accountId.trim();
+    if (normalizedAccountId.length === 0) {
+      throw new HttpError(400, "invalid_account_id", "Account ID is required.");
+    }
+
+    const account = this.accounts.read().accounts.find((candidate) => candidate.id === normalizedAccountId);
+    if (!account) {
+      throw new HttpError(404, "account_not_found", "Account could not be found.");
+    }
+
+    return account.quotaSyncIssue ?? null;
   }
 
   public async syncAccountStateNow(): Promise<void> {
@@ -550,12 +614,16 @@ export class ConnectorService {
 
     for (const target of snapshot.accounts) {
       if (
-        target.provider === "codex" &&
+        (target.authMethod ?? "oauth") === "oauth" &&
         target.refreshToken &&
         this.oauthProviderService.isTokenNearExpiry(target.tokenExpiresAt)
       ) {
         try {
-          const refreshedToken = await this.oauthProviderService.refreshAccessToken(target.refreshToken);
+          const refreshedToken = await this.oauthProviderService.refreshAccessTokenFor(
+            target.provider,
+            target.oauthProfileId,
+            target.refreshToken,
+          );
           const nowIso = new Date().toISOString();
 
           this.accounts.update((draft) => {
@@ -588,6 +656,7 @@ export class ConnectorService {
             account.quotaSyncStatus =
               this.strictLiveQuota || account.quota.fiveHour.limit <= 0 ? "unavailable" : "stale";
             account.quotaSyncError = message;
+            account.quotaSyncIssue = null;
             account.quotaSyncedAt = nowIso;
             account.updatedAt = nowIso;
           });
@@ -632,6 +701,7 @@ export class ConnectorService {
             account.estimatedUsageUpdatedAt = null;
             account.quotaSyncStatus = "unavailable";
             account.quotaSyncError = null;
+            account.quotaSyncIssue = null;
             account.quotaSyncedAt = nowIso;
             account.updatedAt = nowIso;
             return;
@@ -639,6 +709,7 @@ export class ConnectorService {
 
           account.quotaSyncStatus = this.strictLiveQuota ? "unavailable" : "stale";
           account.quotaSyncError = null;
+          account.quotaSyncIssue = null;
           account.quotaSyncedAt = nowIso;
           account.updatedAt = nowIso;
         });
@@ -684,6 +755,7 @@ export class ConnectorService {
               account.estimatedUsageUpdatedAt = null;
               account.quotaSyncStatus = "unavailable";
               account.quotaSyncError = null;
+              account.quotaSyncIssue = null;
               account.quotaSyncedAt = nowIso;
               account.updatedAt = nowIso;
               return;
@@ -691,6 +763,7 @@ export class ConnectorService {
 
             account.quotaSyncStatus = this.strictLiveQuota ? "unavailable" : "stale";
             account.quotaSyncError = "Live usage endpoint returned no usable quota data.";
+            account.quotaSyncIssue = null;
             account.quotaSyncedAt = nowIso;
             account.updatedAt = nowIso;
           });
@@ -726,10 +799,12 @@ export class ConnectorService {
           account.quotaSyncedAt = liveQuota.syncedAt;
           account.quotaSyncStatus = liveQuota.partial ? "stale" : "live";
           account.quotaSyncError = liveQuota.syncError;
+          account.quotaSyncIssue = null;
           account.updatedAt = nowIso;
         });
       } catch (error) {
         const detail = syncErrorDetail(error, "unknown live quota sync failure");
+        const syncIssue = quotaSyncIssueFromError(error);
         const message = `Live quota sync failed: ${detail}`;
         process.stderr.write(`Live quota sync failed for account ${target.id}: ${detail}\n`);
         const nowIso = new Date().toISOString();
@@ -762,6 +837,7 @@ export class ConnectorService {
             account.estimatedUsageUpdatedAt = null;
             account.quotaSyncStatus = "unavailable";
             account.quotaSyncError = null;
+            account.quotaSyncIssue = null;
             account.quotaSyncedAt = nowIso;
             account.updatedAt = nowIso;
             return;
@@ -770,6 +846,7 @@ export class ConnectorService {
           account.quotaSyncStatus =
             this.strictLiveQuota || account.quota.fiveHour.limit <= 0 ? "unavailable" : "stale";
           account.quotaSyncError = message;
+          account.quotaSyncIssue = syncIssue;
           account.quotaSyncedAt = nowIso;
           account.updatedAt = nowIso;
         });

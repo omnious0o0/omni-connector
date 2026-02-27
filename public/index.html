@@ -1,471 +1,443 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>omni-connector</title>
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    
-    <link rel="stylesheet" href="/styles.css" />
-    <script
-      src="https://unpkg.com/lucide@0.575.0/dist/umd/lucide.min.js"
-      integrity="sha384-GzE8qT1LzDfRNjtvLN/dXDLPlJOB3BBom3Twb9/RwHkXCgNl6OU1pBxM9397HWGU"
-      crossorigin="anonymous"
-    ></script>
-  </head>
-  <body>
-    <div class="app-layout">
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <div class="logo-box">
-            <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-              <title>omni-connector logo</title>
-              <rect x="16" y="16" width="6" height="6" rx="1"></rect>
-              <rect x="2" y="16" width="6" height="6" rx="1"></rect>
-              <rect x="9" y="2" width="6" height="6" rx="1"></rect>
-              <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"></path>
-              <path d="M12 12V8"></path>
-            </svg>
-          </div>
-          <div>
-            <h1 class="brand-title">omni-connector</h1>
-            <p class="brand-subtitle">multi-account router</p>
-          </div>
-          <button id="toggle-sidebar" class="btn btn-icon sidebar-toggle-btn" type="button" aria-label="Collapse panel" title="Collapse panel">
-            <i data-lucide="panel-left-close"></i>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>omni-connector</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://unpkg.com/lucide@0.575.0/dist/umd/lucide.min.js"
+    integrity="sha384-GzE8qT1LzDfRNjtvLN/dXDLPlJOB3BBom3Twb9/RwHkXCgNl6OU1pBxM9397HWGU"
+    crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-box">
+          <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2"
+            fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <title>omni-connector logo</title>
+            <rect x="16" y="16" width="6" height="6" rx="1"></rect>
+            <rect x="2" y="16" width="6" height="6" rx="1"></rect>
+            <rect x="9" y="2" width="6" height="6" rx="1"></rect>
+            <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"></path>
+            <path d="M12 12V8"></path>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">omni-connector</h1>
+          <p class="brand-subtitle">multi-account router</p>
+        </div>
+        <button id="toggle-sidebar" class="btn btn-icon sidebar-toggle-btn" type="button" aria-label="Collapse panel"
+          title="Collapse panel">
+          <i data-lucide="panel-left-close"></i>
+        </button>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="sidebar-pages" role="tablist" aria-label="Workspace views">
+          <button id="show-overview" class="side-tab is-active" type="button" role="tab" aria-selected="true"
+            aria-controls="dashboard-view">
+            <i data-lucide="layout-dashboard"></i>
+            <span>Overview</span>
+          </button>
+          <button id="open-settings" class="side-tab" type="button" role="tab" aria-selected="false"
+            aria-controls="settings-view">
+            <i data-lucide="settings-2"></i>
+            <span>Settings</span>
           </button>
         </div>
 
-        <nav class="sidebar-nav">
-          <div class="sidebar-pages" role="tablist" aria-label="Workspace views">
-            <button
-              id="show-overview"
-              class="side-tab is-active"
-              type="button"
-              role="tab"
-              aria-selected="true"
-              aria-controls="dashboard-view"
-            >
-              <i data-lucide="layout-dashboard"></i>
-              <span>Overview</span>
-            </button>
-            <button
-              id="open-settings"
-              class="side-tab"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="settings-view"
-            >
-              <i data-lucide="settings-2"></i>
-              <span>Settings</span>
-            </button>
-          </div>
-
-          <section id="sidebar-models-panel" class="sidebar-models-panel" aria-live="polite">
-            <header class="sidebar-models-header">
-              <h2>Models</h2>
-            </header>
-            <div id="sidebar-models-content" class="sidebar-models-content">
-              <p class="sidebar-models-empty">Loading connected models...</p>
-            </div>
-          </section>
-
-          <div class="nav-actions">
-            <button id="connect-trigger" class="btn btn-primary" type="button">
-              <i data-lucide="plus"></i> Connect
-            </button>
-            <button id="refresh-dashboard" class="btn btn-outline" type="button">
-              <i data-lucide="refresh-cw"></i> Refresh
-            </button>
-          </div>
-        </nav>
-      </aside>
-
-      <div
-        id="sidebar-resizer"
-        class="sidebar-resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize side panel"
-        aria-valuemin="220"
-        aria-valuemax="420"
-        aria-valuenow="288"
-        tabindex="0"
-      ></div>
-
-      <main class="main-content">
-        <header class="page-header">
-          <div class="topbar-container">
-            <div class="topbar-left" aria-hidden="true"></div>
-            <div id="topbar-time" class="topbar-time">--:--:--</div>
-            <div id="topbar-status" class="topbar-status" data-state="preparing" role="status" aria-live="polite">
-              <span class="topbar-status-dot"></span>
-              <span id="topbar-status-text">Preparing</span>
-            </div>
-          </div>
-        </header>
-
-        <div id="dashboard-view" class="dashboard-grid" role="tabpanel" aria-labelledby="show-overview">
-          <div class="dashboard-left">
-            <section class="panel inventory-panel">
-              <header class="panel-header">
-                <div class="panel-title-group">
-                  <h2>Accounts</h2>
-                </div>
-              </header>
-              <div class="panel-body">
-                <div id="accounts-list" class="accounts-list">
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div class="dashboard-right">
-            <section class="metrics-grid">
-              <article class="metric-card">
-                <div class="metric-header">
-                  <i data-lucide="users"></i>
-                  <h3>Connected Accounts</h3>
-                </div>
-                <p id="metric-account-count" class="metric-value">0</p>
-                <p class="metric-caption">Available for routing</p>
-              </article>
-
-              <article class="metric-card">
-                <div class="metric-header">
-                  <i data-lucide="clock"></i>
-                  <h3 id="metric-window-a-label"></h3>
-                </div>
-                <p id="metric-five-hour" class="metric-value">0</p>
-                <p id="metric-five-hour-detail" class="metric-caption">0 / 0 limits</p>
-              </article>
-
-              <article class="metric-card">
-                <div class="metric-header">
-                  <i data-lucide="calendar"></i>
-                  <h3 id="metric-window-b-label"></h3>
-                </div>
-                <p id="metric-weekly" class="metric-value">0</p>
-                <p id="metric-weekly-detail" class="metric-caption">0 / 0 limits</p>
-              </article>
-
-              <article class="metric-card highlight-card">
-                <div class="metric-header">
-                  <i data-lucide="zap"></i>
-                  <h3>Current Best Route</h3>
-                </div>
-                <p id="metric-best-account" class="metric-value text-sm">None</p>
-                <p id="metric-best-score" class="metric-caption">Score 0%</p>
-              </article>
-            </section>
-
-            <section class="panel router-panel">
-              <header class="panel-header">
-                <div class="panel-title-group">
-                  <h2>Connector Access</h2>
-                </div>
-              </header>
-              
-              <div class="panel-body">
-                <div class="key-display">
-                  <div class="key-header">
-                    <span class="key-label">API KEY</span>
-                    <div class="key-actions">
-                      <button id="copy-key" class="btn btn-icon" type="button" aria-label="Copy Key" title="Copy Key">
-                        <i data-lucide="copy"></i>
-                      </button>
-                      <button
-                        id="toggle-key-visibility"
-                        class="btn btn-icon"
-                        type="button"
-                        aria-label="Toggle key visibility"
-                        title="Toggle key visibility"
-                      >
-                        <i data-lucide="eye-off"></i>
-                      </button>
-                      <button id="rotate-key" class="btn btn-icon text-warn" type="button" aria-label="Rotate Key" title="Rotate Key">
-                        <i data-lucide="refresh-ccw"></i>
-                      </button>
-                    </div>
-                  </div>
-                  <code id="connector-key" class="mono-code">Loading...</code>
-                  <p id="key-access-note" class="key-note">Loading connector actions...</p>
-                </div>
-
-                <form id="routing-priority-form" class="router-form">
-                  <label for="routing-preferred-provider" class="form-label">Preferred provider</label>
-                  <select id="routing-preferred-provider" name="preferredProvider" class="custom-input">
-                    <option value="auto">Auto (best available)</option>
-                  </select>
-
-                  <label for="routing-priority-models" class="form-label">Priority models</label>
-                  <textarea
-                    id="routing-priority-models"
-                    name="priorityModels"
-                    class="custom-input custom-textarea"
-                    rows="4"
-                    placeholder="auto"
-                  ></textarea>
-                  <p class="form-note">One model per line (for example: <code>auto</code>, <code>openrouter/gpt-4o-mini</code>).</p>
-
-                  <fieldset class="fallback-fieldset">
-                    <legend class="form-label">Fallback providers</legend>
-                    <div id="routing-fallback-providers" class="fallback-providers"></div>
-                  </fieldset>
-
-                  <div class="form-group">
-                    <button type="submit" class="btn btn-secondary">Save Priority</button>
-                    <button id="routing-priority-reset" type="button" class="btn btn-outline">Reset to Auto</button>
-                  </div>
-                </form>
-
-                <div class="console-output">
-                  <pre id="routing-priority-result" class="console-body" aria-live="polite">Priority routing settings ready.</pre>
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
-
-        <section id="settings-view" class="settings-page" role="tabpanel" aria-labelledby="open-settings" hidden>
-          <div class="settings-page-head">
-            <h3>Workspace Settings</h3>
-            <p>Control privacy, layout density, and interaction behavior for this dashboard.</p>
-          </div>
-
-          <div class="settings-page-grid">
-            <section class="settings-card">
-              <h4>Privacy</h4>
-
-              <label class="settings-switch" for="settings-show-sensitive">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Show sensitive account details</p>
-                  <p class="settings-switch-note">Display full names, provider IDs, and workspace identifiers.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-show-sensitive" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <label class="settings-switch" for="settings-reveal-key">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Reveal API key by default</p>
-                  <p class="settings-switch-note">Keep the connector key fully visible until you hide it.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-reveal-key" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <label class="settings-switch" for="settings-mask-route-payload">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Mask route output payload</p>
-                  <p class="settings-switch-note">Hide sensitive values in the route simulation console output.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-mask-route-payload" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-            </section>
-
-            <section class="settings-card">
-              <h4>Layout</h4>
-
-              <label class="settings-switch" for="settings-compact-cards">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Compact account cards</p>
-                  <p class="settings-switch-note">Use tighter spacing for a denser 3-column account view.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-compact-cards" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <label class="settings-switch" for="settings-default-collapsed">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Start with side panel collapsed</p>
-                  <p class="settings-switch-note">Apply collapsed side panel state when this page loads.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-default-collapsed" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <button id="reset-layout" class="btn btn-outline" type="button">
-                <i data-lucide="panel-left"></i> Reset panel state
-              </button>
-            </section>
-
-            <section class="settings-card">
-              <h4>Interaction</h4>
-
-              <label class="settings-switch" for="settings-auto-refresh">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Auto refresh dashboard</p>
-                  <p class="settings-switch-note">Refresh usage and account status every 30 seconds.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-auto-refresh" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <label class="settings-switch" for="settings-confirm-removal">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Confirm before removing an account</p>
-                  <p class="settings-switch-note">Require explicit confirmation before account deletion.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-confirm-removal" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <label class="settings-switch" for="settings-remember-page-tab">
-                <div class="settings-switch-copy">
-                  <p class="settings-switch-title">Remember active sidebar tab</p>
-                  <p class="settings-switch-note">Restore the last selected page when reopening the app.</p>
-                </div>
-                <span class="switch-control">
-                  <input id="settings-remember-page-tab" type="checkbox" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </span>
-              </label>
-
-              <button id="reset-preferences" class="btn btn-outline" type="button">
-                <i data-lucide="rotate-ccw"></i> Reset all preferences
-              </button>
-            </section>
+        <section id="sidebar-models-panel" class="sidebar-models-panel" aria-live="polite">
+          <header class="sidebar-models-header">
+            <h2>Models</h2>
+          </header>
+          <div id="sidebar-models-content" class="sidebar-models-content">
+            <p class="sidebar-models-empty">Loading connected models...</p>
           </div>
         </section>
-      </main>
-    </div>
 
-    <div id="toast" class="toast" aria-live="polite">
-      <i data-lucide="info" class="toast-icon"></i>
-      <span class="toast-msg"></span>
-    </div>
-
-    <div id="connect-modal" class="connect-modal" hidden>
-      <div class="connect-modal-backdrop" data-close-connect-modal></div>
-      <section
-        class="connect-modal-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="connect-modal-title"
-      >
-        <header class="connect-modal-header">
-          <div>
-            <h3 id="connect-modal-title">Connect</h3>
-            <p>Choose a provider and auth method.</p>
-          </div>
-          <button id="connect-modal-close" class="btn btn-icon" type="button" aria-label="Close connect dialog">
-            <i data-lucide="x"></i>
+        <div class="nav-actions">
+          <button id="connect-trigger" class="btn btn-primary" type="button">
+            <i data-lucide="plus"></i> Connect
           </button>
-        </header>
-
-        <div id="connect-provider-list" class="connect-provider-list" aria-live="polite"></div>
-
-        <form id="api-link-form" class="connect-api-form" hidden>
-          <h4 id="api-link-title">Link API key</h4>
-          <p id="api-link-provider" class="connect-api-provider">Provider</p>
-          <label for="api-link-display-name" class="form-label">Display name</label>
-          <input id="api-link-display-name" name="displayName" type="text" class="custom-input" maxlength="120" />
-
-          <label for="api-link-provider-account-id" class="form-label">Provider account ID (optional)</label>
-          <input
-            id="api-link-provider-account-id"
-            name="providerAccountId"
-            type="text"
-            class="custom-input"
-            maxlength="160"
-          />
-
-          <label for="api-link-key" class="form-label">API key</label>
-          <input id="api-link-key" name="apiKey" type="password" class="custom-input" autocomplete="off" required />
-
-          <label for="api-link-manual-5h" class="form-label">Manual limit (last resort)</label>
-          <input id="api-link-manual-5h" name="manualFiveHourLimit" type="number" min="1" class="custom-input" />
-
-          <label for="api-link-manual-7d" class="form-label">Manual secondary limit (last resort)</label>
-          <input id="api-link-manual-7d" name="manualWeeklyLimit" type="number" min="1" class="custom-input" />
-
-          <p id="api-link-manual-note" class="connect-provider-note"></p>
-
-          <div class="connect-api-actions">
-            <button id="api-link-cancel" class="btn btn-outline" type="button">Back</button>
-            <button id="api-link-submit" class="btn btn-secondary" type="submit">Link API Key</button>
-          </div>
-        </form>
-      </section>
-    </div>
-
-    <div id="account-settings-modal" class="connect-modal account-settings-modal" hidden>
-      <div class="connect-modal-backdrop" data-close-account-settings-modal></div>
-      <section
-        class="connect-modal-panel account-settings-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="account-settings-title"
-      >
-        <header class="connect-modal-header">
-          <div>
-            <h3 id="account-settings-title">Account Settings</h3>
-            <p id="account-settings-provider">Provider</p>
-          </div>
-          <button id="account-settings-close" class="btn btn-icon" type="button" aria-label="Close account settings dialog">
-            <i data-lucide="x"></i>
+          <button id="refresh-dashboard" class="btn btn-outline" type="button">
+            <i data-lucide="refresh-cw"></i> Refresh
           </button>
-        </header>
+        </div>
+      </nav>
+    </aside>
 
-        <form id="account-settings-form" class="account-settings-form">
-          <div class="account-settings-grid" aria-live="polite">
-            <div class="account-settings-meta">
-              <span>Auth Method</span>
-              <strong id="account-settings-auth">N/A</strong>
-            </div>
-            <div class="account-settings-meta">
-              <span>Provider Account ID</span>
-              <strong id="account-settings-provider-account">N/A</strong>
-            </div>
-            <div id="account-settings-oauth-profile-wrapper" class="account-settings-meta" hidden>
-              <span>OAuth Profile</span>
-              <strong id="account-settings-oauth-profile">N/A</strong>
-            </div>
-            <div class="account-settings-meta">
-              <span>Sync Status</span>
-              <strong id="account-settings-sync-status">N/A</strong>
-            </div>
+    <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical"
+      aria-label="Resize side panel" aria-valuemin="220" aria-valuemax="420" aria-valuenow="288" tabindex="0"></div>
+
+    <main class="main-content">
+      <header class="page-header">
+        <div class="topbar-container">
+          <div class="topbar-left" aria-hidden="true"></div>
+          <div id="topbar-time" class="topbar-time">--:--:--</div>
+          <div id="topbar-status" class="topbar-status" data-state="preparing" role="status" aria-live="polite">
+            <span class="topbar-status-dot"></span>
+            <span id="topbar-status-text">Preparing</span>
           </div>
+        </div>
+      </header>
 
-          <label for="account-settings-display-name" class="form-label">Display name</label>
-          <input id="account-settings-display-name" name="displayName" type="text" class="custom-input" maxlength="120" required />
+      <div id="dashboard-view" class="dashboard-grid" role="tabpanel" aria-labelledby="show-overview">
+        <div class="dashboard-left">
+          <section class="panel inventory-panel">
+            <header class="panel-header">
+              <div class="panel-title-group">
+                <h2>Accounts</h2>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="accounts-list" class="accounts-list">
+              </div>
+            </div>
+          </section>
+        </div>
 
-          <div id="account-settings-api-limits" class="account-settings-api-limits" hidden>
-            <label for="account-settings-5h" class="form-label">Manual limit</label>
-            <input id="account-settings-5h" name="manualFiveHourLimit" type="number" min="1" class="custom-input" />
+        <div class="dashboard-right">
+          <section class="metrics-grid">
+            <article class="metric-card">
+              <div class="metric-header">
+                <i data-lucide="users"></i>
+                <h3>Connected Accounts</h3>
+              </div>
+              <p id="metric-account-count" class="metric-value">0</p>
+              <p class="metric-caption">Available for routing</p>
+            </article>
 
-            <label for="account-settings-7d" class="form-label">Manual secondary limit</label>
-            <input id="account-settings-7d" name="manualWeeklyLimit" type="number" min="1" class="custom-input" />
-          </div>
+            <article class="metric-card">
+              <div class="metric-header">
+                <i data-lucide="clock"></i>
+                <h3 id="metric-window-a-label"></h3>
+              </div>
+              <p id="metric-five-hour" class="metric-value">0</p>
+              <p id="metric-five-hour-detail" class="metric-caption">0 / 0 limits</p>
+            </article>
 
-          <div class="account-settings-actions">
-            <button id="account-settings-cancel" class="btn btn-outline" type="button">Cancel</button>
-            <button id="account-settings-save" class="btn btn-secondary" type="submit">Save</button>
-          </div>
-        </form>
+            <article class="metric-card">
+              <div class="metric-header">
+                <i data-lucide="calendar"></i>
+                <h3 id="metric-window-b-label"></h3>
+              </div>
+              <p id="metric-weekly" class="metric-value">0</p>
+              <p id="metric-weekly-detail" class="metric-caption">0 / 0 limits</p>
+            </article>
+
+            <article class="metric-card highlight-card">
+              <div class="metric-header">
+                <i data-lucide="zap"></i>
+                <h3>Current Best Route</h3>
+              </div>
+              <p id="metric-best-account" class="metric-value text-sm">None</p>
+              <p id="metric-best-score" class="metric-caption">Score 0%</p>
+            </article>
+          </section>
+
+          <section class="panel router-panel">
+            <header class="panel-header">
+              <div class="panel-title-group">
+                <h2>Connector Access</h2>
+              </div>
+            </header>
+
+            <div class="panel-body">
+              <div class="key-display">
+                <div class="key-header">
+                  <span class="key-label">API KEY</span>
+                  <div class="key-actions">
+                    <button id="copy-key" class="btn btn-icon" type="button" aria-label="Copy Key" title="Copy Key">
+                      <i data-lucide="copy"></i>
+                    </button>
+                    <button id="toggle-key-visibility" class="btn btn-icon" type="button"
+                      aria-label="Toggle key visibility" title="Toggle key visibility">
+                      <i data-lucide="eye-off"></i>
+                    </button>
+                    <button id="rotate-key" class="btn btn-icon text-warn" type="button" aria-label="Rotate Key"
+                      title="Rotate Key">
+                      <i data-lucide="refresh-ccw"></i>
+                    </button>
+                  </div>
+                </div>
+                <code id="connector-key" class="mono-code">Loading...</code>
+                <p id="key-access-note" class="key-note">Loading connector actions...</p>
+              </div>
+
+              <form id="routing-priority-form" class="router-form">
+                <label for="routing-preferred-provider" class="form-label">Preferred provider</label>
+                <select id="routing-preferred-provider" name="preferredProvider" class="custom-input">
+                  <option value="auto">Auto (best available)</option>
+                </select>
+
+                <label for="routing-priority-models" class="form-label">Priority models</label>
+                <textarea id="routing-priority-models" name="priorityModels" class="custom-input custom-textarea"
+                  rows="4" placeholder="auto"></textarea>
+                <p class="form-note">One model per line (for example: <code>auto</code>,
+                  <code>PROVIDER-ID/MODEL-ID</code>).
+                </p>
+
+                <fieldset class="fallback-fieldset">
+                  <legend class="form-label">Fallback providers</legend>
+                  <div id="routing-fallback-providers" class="fallback-providers"></div>
+                </fieldset>
+
+                <div class="form-group">
+                  <button type="submit" class="btn btn-secondary">Save Priority</button>
+                  <button id="routing-priority-reset" type="button" class="btn btn-outline">Reset to Auto</button>
+                </div>
+              </form>
+
+              <div class="console-output">
+                <pre id="routing-priority-result" class="console-body"
+                  aria-live="polite">Priority routing settings ready.</pre>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <section id="settings-view" class="settings-page" role="tabpanel" aria-labelledby="open-settings" hidden>
+        <div class="settings-page-head">
+          <h3>Workspace Settings</h3>
+          <p>Control privacy, layout density, and interaction behavior for this dashboard.</p>
+        </div>
+
+        <div class="settings-page-grid">
+          <section class="settings-card">
+            <h4>Privacy</h4>
+
+            <label class="settings-switch" for="settings-show-sensitive">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Show sensitive account details</p>
+                <p class="settings-switch-note">Display full names, provider IDs, and workspace identifiers.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-show-sensitive" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <label class="settings-switch" for="settings-reveal-key">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Reveal API key by default</p>
+                <p class="settings-switch-note">Keep the connector key fully visible until you hide it.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-reveal-key" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <label class="settings-switch" for="settings-mask-route-payload">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Mask route output payload</p>
+                <p class="settings-switch-note">Hide sensitive values in the route simulation console output.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-mask-route-payload" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+          </section>
+
+          <section class="settings-card">
+            <h4>Layout</h4>
+
+            <label class="settings-switch" for="settings-compact-cards">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Compact account cards</p>
+                <p class="settings-switch-note">Use tighter spacing for a denser 3-column account view.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-compact-cards" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <label class="settings-switch" for="settings-default-collapsed">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Start with side panel collapsed</p>
+                <p class="settings-switch-note">Apply collapsed side panel state when this page loads.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-default-collapsed" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <button id="reset-layout" class="btn btn-outline" type="button">
+              <i data-lucide="panel-left"></i> Reset panel state
+            </button>
+          </section>
+
+          <section class="settings-card">
+            <h4>Interaction</h4>
+
+            <label class="settings-switch" for="settings-auto-refresh">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Auto refresh dashboard</p>
+                <p class="settings-switch-note">Refresh usage and account status every 30 seconds.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-auto-refresh" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <label class="settings-switch" for="settings-confirm-removal">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Confirm before removing an account</p>
+                <p class="settings-switch-note">Require explicit confirmation before account deletion.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-confirm-removal" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <label class="settings-switch" for="settings-remember-page-tab">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Remember active sidebar tab</p>
+                <p class="settings-switch-note">Restore the last selected page when reopening the app.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-remember-page-tab" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
+
+            <button id="reset-preferences" class="btn btn-outline" type="button">
+              <i data-lucide="rotate-ccw"></i> Reset all preferences
+            </button>
+          </section>
+        </div>
       </section>
-    </div>
+    </main>
+  </div>
 
-    <script type="module" src="/app.js"></script>
-  </body>
+  <div id="toast" class="toast" aria-live="polite">
+    <i data-lucide="info" class="toast-icon"></i>
+    <span class="toast-msg"></span>
+  </div>
+
+  <div id="connect-modal" class="connect-modal" hidden>
+    <div class="connect-modal-backdrop" data-close-connect-modal></div>
+    <section class="connect-modal-panel" role="dialog" aria-modal="true" aria-labelledby="connect-modal-title">
+      <header class="connect-modal-header">
+        <div>
+          <h3 id="connect-modal-title">Connect</h3>
+          <p>Choose a provider and auth method.</p>
+        </div>
+        <button id="connect-modal-close" class="btn btn-icon" type="button" aria-label="Close connect dialog">
+          <i data-lucide="x"></i>
+        </button>
+      </header>
+
+      <div id="connect-provider-list" class="connect-provider-list" aria-live="polite"></div>
+
+      <form id="api-link-form" class="connect-api-form" hidden>
+        <h4 id="api-link-title">Link API key</h4>
+        <p id="api-link-provider" class="connect-api-provider">Provider</p>
+        <label for="api-link-display-name" class="form-label">Display name</label>
+        <input id="api-link-display-name" name="displayName" type="text" class="custom-input" maxlength="120" />
+
+        <label for="api-link-provider-account-id" class="form-label">Provider account ID (optional)</label>
+        <input id="api-link-provider-account-id" name="providerAccountId" type="text" class="custom-input"
+          maxlength="160" />
+
+        <label for="api-link-key" class="form-label">API key</label>
+        <input id="api-link-key" name="apiKey" type="password" class="custom-input" autocomplete="off" required />
+
+        <label for="api-link-manual-5h" class="form-label">Manual limit (last resort)</label>
+        <input id="api-link-manual-5h" name="manualFiveHourLimit" type="number" min="1" class="custom-input" />
+
+        <label for="api-link-manual-7d" class="form-label">Manual secondary limit (last resort)</label>
+        <input id="api-link-manual-7d" name="manualWeeklyLimit" type="number" min="1" class="custom-input" />
+
+        <p id="api-link-manual-note" class="connect-provider-note"></p>
+
+        <div class="connect-api-actions">
+          <button id="api-link-cancel" class="btn btn-outline" type="button">Back</button>
+          <button id="api-link-submit" class="btn btn-secondary" type="submit">Link API Key</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div id="account-settings-modal" class="connect-modal account-settings-modal" hidden>
+    <div class="connect-modal-backdrop" data-close-account-settings-modal></div>
+    <section class="connect-modal-panel account-settings-panel" role="dialog" aria-modal="true"
+      aria-labelledby="account-settings-title">
+      <header class="connect-modal-header">
+        <div>
+          <h3 id="account-settings-title">Account Settings</h3>
+          <p id="account-settings-provider">Provider</p>
+        </div>
+        <button id="account-settings-close" class="btn btn-icon" type="button"
+          aria-label="Close account settings dialog">
+          <i data-lucide="x"></i>
+        </button>
+      </header>
+
+      <form id="account-settings-form" class="account-settings-form">
+        <div class="account-settings-grid" aria-live="polite">
+          <div class="account-settings-meta">
+            <span>Auth Method</span>
+            <strong id="account-settings-auth"></strong>
+          </div>
+          <div class="account-settings-meta">
+            <span>Provider Account ID</span>
+            <strong id="account-settings-provider-account"></strong>
+          </div>
+          <div id="account-settings-oauth-profile-wrapper" class="account-settings-meta" hidden>
+            <span>OAuth Profile</span>
+            <strong id="account-settings-oauth-profile"></strong>
+          </div>
+          <div class="account-settings-meta">
+            <span>Sync Status</span>
+            <strong id="account-settings-sync-status"></strong>
+          </div>
+        </div>
+
+        <div id="account-settings-sync-guidance" class="account-settings-sync-guidance" hidden>
+          <p id="account-settings-sync-guidance-title" class="account-settings-sync-guidance-title"></p>
+          <ul id="account-settings-sync-guidance-steps" class="account-settings-sync-guidance-steps"></ul>
+          <a id="account-settings-sync-guidance-action" class="btn btn-outline account-verify-action" href="#">Open verification</a>
+        </div>
+
+        <label for="account-settings-display-name" class="form-label">Display name</label>
+        <input id="account-settings-display-name" name="displayName" type="text" class="custom-input" maxlength="120"
+          required />
+
+        <div id="account-settings-api-limits" class="account-settings-api-limits" hidden>
+          <label for="account-settings-5h" class="form-label">Manual limit</label>
+          <input id="account-settings-5h" name="manualFiveHourLimit" type="number" min="1" class="custom-input" />
+
+          <label for="account-settings-7d" class="form-label">Manual secondary limit</label>
+          <input id="account-settings-7d" name="manualWeeklyLimit" type="number" min="1" class="custom-input" />
+        </div>
+
+        <div class="account-settings-actions">
+          <button id="account-settings-cancel" class="btn btn-outline" type="button">Cancel</button>
+          <button id="account-settings-save" class="btn btn-secondary" type="submit">Save</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+
 </html>

@@ -7,4 +7,5 @@ coverage/
 .env.*
 !.env.example
 AGENTS.md
-providers.md
+reference/
+tests/

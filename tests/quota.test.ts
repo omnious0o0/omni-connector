@@ -34,19 +34,19 @@ function createAccountState(): ConnectedAccount {
   };
 }
 
-test("weekly exhaustion forces five-hour remaining to zero", () => {
+test("weekly exhaustion does not overwrite five-hour usage window", () => {
   const nowMs = Date.now();
   const account = createAccountState();
 
   account.quota.weekly.used = account.quota.weekly.limit;
-  account.quota.fiveHour.used = 0;
-  account.quota.fiveHour.windowStartedAt = new Date(nowMs - 6 * 60 * 60 * 1000).toISOString();
+  account.quota.fiveHour.used = 20;
+  account.quota.fiveHour.windowStartedAt = new Date(nowMs - 60 * 60 * 1000).toISOString();
 
   normalizeAccountQuota(account, nowMs);
 
   assert.equal(remainingQuota(account.quota.weekly), 0);
-  assert.equal(remainingQuota(account.quota.fiveHour), 0);
-  assert.equal(account.quota.fiveHour.used, account.quota.fiveHour.limit);
+  assert.equal(remainingQuota(account.quota.fiveHour), 80);
+  assert.equal(account.quota.fiveHour.used, 20);
 });
 
 test("five-hour window can refresh while weekly still has quota", () => {
@@ -64,7 +64,7 @@ test("five-hour window can refresh while weekly still has quota", () => {
   assert.equal(account.quota.fiveHour.used, 0);
 });
 
-test("dashboard five-hour remaining respects weekly cap", () => {
+test("dashboard keeps five-hour and weekly remaining independent", () => {
   const account = createAccountState();
 
   account.quota.fiveHour.used = 0;
@@ -73,6 +73,6 @@ test("dashboard five-hour remaining respects weekly cap", () => {
   const dashboardAccount = toDashboardAccount(account);
 
   assert.equal(dashboardAccount.quota.weekly.remaining, 5);
-  assert.equal(dashboardAccount.quota.fiveHour.remaining, 5);
-  assert.equal(dashboardAccount.quota.fiveHour.remainingRatio, 0.05);
+  assert.equal(dashboardAccount.quota.fiveHour.remaining, 100);
+  assert.equal(dashboardAccount.quota.fiveHour.remainingRatio, 1);
 });

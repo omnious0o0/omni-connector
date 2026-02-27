@@ -1,7 +1,8 @@
 import { AppConfig, ProviderUsageConfig } from "../config";
 import { HttpError } from "../errors";
-import { ConnectedAccount, ProviderId, QuotaWindowMode } from "../types";
+import { ConnectedAccount, ProviderId, QuotaSyncIssue, QuotaWindowMode } from "../types";
 import { resilientFetch } from "./http-resilience";
+import { fetchGeminiCliProjectId } from "./oauth-provider/gemini-cli";
 
 const GEMINI_CODE_ASSIST_BASE_URL = "https://cloudcode-pa.googleapis.com";
 const GEMINI_CODE_ASSIST_API_VERSION = "v1internal";
@@ -66,6 +67,24 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function asHttpsUrl(value: unknown): string | null {
+  const raw = asString(value);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:") {
+      return null;
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 function quotaTokenTypeLabel(tokenType: string | null): string | null {
@@ -290,7 +309,93 @@ function extractUpstreamError(payload: unknown): string | null {
 
   const message = asString(errorRecord.message);
   const status = asString(errorRecord.status);
-  return message ?? directMessage ?? status;
+  let reason: string | null = null;
+
+  for (const detail of asArray(errorRecord.details)) {
+    const detailRecord = asRecord(detail);
+    if (!detailRecord) {
+      continue;
+    }
+
+    const detailReason = asString(detailRecord.reason);
+    if (detailReason) {
+      reason = detailReason;
+      break;
+    }
+
+    const metadata = asRecord(detailRecord.metadata);
+    const metadataReason = metadata ? asString(metadata.reason) : null;
+    if (metadataReason) {
+      reason = metadataReason;
+      break;
+    }
+  }
+
+  const summary = message ?? directMessage ?? status;
+  if (!summary) {
+    return reason;
+  }
+
+  if (reason && !summary.includes(reason)) {
+    return `${summary} (${reason})`;
+  }
+
+  return summary;
+}
+
+function extractUpstreamValidationLink(payload: unknown): string | null {
+  const root = asRecord(payload);
+  if (!root) {
+    return null;
+  }
+
+  const errorRecord = asRecord(root.error);
+  if (!errorRecord) {
+    return null;
+  }
+
+  const directMetadata = asRecord(errorRecord.metadata);
+  const directLink = asHttpsUrl(directMetadata?.validation_link ?? directMetadata?.validationUrl);
+  if (directLink) {
+    return directLink;
+  }
+
+  for (const detail of asArray(errorRecord.details)) {
+    const detailRecord = asRecord(detail);
+    if (!detailRecord) {
+      continue;
+    }
+
+    for (const linkEntry of asArray(detailRecord.links)) {
+      const linkRecord = asRecord(linkEntry);
+      const link = asHttpsUrl(linkRecord?.url);
+      if (link) {
+        return link;
+      }
+    }
+
+    const metadata = asRecord(detailRecord.metadata);
+    const metadataLink = asHttpsUrl(metadata?.validation_link ?? metadata?.validationUrl);
+    if (metadataLink) {
+      return metadataLink;
+    }
+  }
+
+  return null;
+}
+
+function geminiAccountVerificationIssue(validationUrl: string): QuotaSyncIssue {
+  return {
+    kind: "account_verification_required",
+    title: "Account verification required",
+    steps: [
+      "Open the Google verification page.",
+      "Finish verification with the same Google account you connected here.",
+      "Return here and refresh your dashboard.",
+    ],
+    actionLabel: "Verify account",
+    actionUrl: validationUrl,
+  };
 }
 
 function fallbackWindowFromAccount(
@@ -594,6 +699,81 @@ export class ProviderUsageService {
     return `${normalizedBase}/${normalizedVersion}:retrieveUserQuota`;
   }
 
+  private buildGeminiQuotaRequestBodies(projectIds: Array<string | null | undefined>): Record<string, string>[] {
+    const result: Record<string, string>[] = [];
+    const seen = new Set<string>();
+
+    for (const rawProjectId of projectIds) {
+      const projectId = typeof rawProjectId === "string" ? rawProjectId.trim() : "";
+      if (projectId.length > 0) {
+        const key = `project:${projectId}`;
+        if (seen.has(key)) {
+          continue;
+        }
+
+        seen.add(key);
+        result.push({ project: projectId });
+        continue;
+      }
+
+      if (!seen.has("empty")) {
+        seen.add("empty");
+        result.push({});
+      }
+    }
+
+    if (!seen.has("empty")) {
+      result.push({});
+    }
+
+    return result;
+  }
+
+  private isGeminiBootstrapRetryCandidate(message: string): boolean {
+    const normalizedMessage = message.trim().toLowerCase();
+    return (
+      normalizedMessage.includes("validation_required") ||
+      normalizedMessage.includes("verify your account") ||
+      normalizedMessage.includes("permission denied") ||
+      normalizedMessage.includes("missing project")
+    );
+  }
+
+  private shouldRetryGeminiQuotaWithBootstrap(error: HttpError): boolean {
+    const normalizedMessage = error.message.trim().toLowerCase();
+    const is403 = normalizedMessage.includes("status 403");
+    const is400 = normalizedMessage.includes("status 400");
+    if (!is403 && !is400) {
+      return false;
+    }
+
+    return this.isGeminiBootstrapRetryCandidate(normalizedMessage);
+  }
+
+  private withGeminiValidationHint(error: HttpError): HttpError {
+    const normalizedMessage = error.message.trim().toLowerCase();
+    const hasStatus403 = normalizedMessage.includes("status 403");
+    if (!hasStatus403 || !this.isGeminiBootstrapRetryCandidate(normalizedMessage)) {
+      return error;
+    }
+
+    const hint = "Complete account verification in Google Gemini Code Assist and retry.";
+    if (normalizedMessage.includes("complete account verification in google gemini code assist")) {
+      return error;
+    }
+
+    return new HttpError(error.status, error.code, `${error.message} ${hint}`, error.context);
+  }
+
+  private async fetchGeminiCodeAssistProjectId(
+    accessToken: string,
+    preferredProjectId: string | null,
+  ): Promise<string | null> {
+    return await fetchGeminiCliProjectId(accessToken, {
+      preferredProjectId,
+    });
+  }
+
   private async postGeminiQuotaRequest(
     endpoint: string,
     accessToken: string,
@@ -636,12 +816,15 @@ export class ProviderUsageService {
 
     if (!response.ok) {
       const detail = extractUpstreamError(payload);
+      const validationLink = extractUpstreamValidationLink(payload);
+      const quotaSyncIssue = validationLink ? geminiAccountVerificationIssue(validationLink) : null;
       throw new HttpError(
         502,
         "provider_usage_fetch_failed",
         detail
           ? `Usage endpoint returned status ${response.status}. ${detail}`
           : `Usage endpoint returned status ${response.status}.`,
+        quotaSyncIssue ? { quotaSyncIssue } : null,
       );
     }
 
@@ -659,8 +842,9 @@ export class ProviderUsageService {
     }
 
     const endpoint = this.geminiCodeAssistQuotaEndpoint();
-    const projectId = account.providerAccountId.trim();
-    const requestBodies: Record<string, string>[] = projectId.length > 0 ? [{ project: projectId }, {}] : [{}];
+    const configuredProjectId = account.providerAccountId.trim();
+    const projectId = configuredProjectId.length > 0 ? configuredProjectId : null;
+    const requestBodies = this.buildGeminiQuotaRequestBodies([projectId, null]);
     let payload: unknown = null;
     let lastError: HttpError | null = null;
 
@@ -678,9 +862,28 @@ export class ProviderUsageService {
       }
     }
 
+    if (payload === null && lastError && this.shouldRetryGeminiQuotaWithBootstrap(lastError)) {
+      const discoveredProjectId = await this.fetchGeminiCodeAssistProjectId(accessToken, projectId);
+      const retryRequestBodies = this.buildGeminiQuotaRequestBodies([discoveredProjectId, projectId, null]);
+
+      for (const requestBody of retryRequestBodies) {
+        try {
+          payload = await this.postGeminiQuotaRequest(endpoint, accessToken, requestBody);
+          lastError = null;
+          break;
+        } catch (error) {
+          if (error instanceof HttpError) {
+            lastError = error;
+          } else {
+            lastError = new HttpError(502, "provider_usage_fetch_failed", errorMessage(error, "Usage fetch failed."));
+          }
+        }
+      }
+    }
+
     if (payload === null) {
       if (lastError) {
-        throw lastError;
+        throw this.withGeminiValidationHint(lastError);
       }
 
       return null;

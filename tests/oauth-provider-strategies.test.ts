@@ -155,6 +155,22 @@ test("buildCodexOAuthProfile maps app config OAuth defaults", () => {
   assert.equal(profile.extraParams.id_token_add_organizations, "true");
 });
 
+test("buildCodexOAuthProfile enforces canonical scopes for default Codex client", () => {
+  const config = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    DATA_FILE: path.join(os.tmpdir(), `omni-codex-strategy-test-${Date.now()}-${Math.random()}.json`),
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    OAUTH_CLIENT_ID: "app_EMoamEEZ73f0CkXaXp7hrann",
+    OAUTH_SCOPES: "openid profile email offline_access api.responses.write",
+  });
+
+  const profile = buildCodexOAuthProfile(config);
+
+  assert.deepEqual(profile.scopes, ["openid", "profile", "email", "offline_access"]);
+});
+
 test("codexUsageCandidateUrls prioritizes configured quota URL", () => {
   const withOverride = codexUsageCandidateUrls("https://example.com/custom-quota");
   assert.deepEqual(withOverride, [

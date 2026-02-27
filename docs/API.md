@@ -1,110 +1,131 @@
-# API
+# Omni-Connector API
 
-Base URL defaults to `http://127.0.0.1:1455`.
+A single smart key that routes requests across all connected AI providers, automatically, uninterrupted.
 
-## `GET /api/auth/provider`
+---
 
-Returns OAuth provider metadata used by the frontend.
+## Not a developer?
 
-## `GET /api/auth/providers`
+Just tell your AI agent this:
+> **Tip:** Gemini CLI is free and can handle this task easily.
 
-Returns connect modal provider catalog with supported methods (`oauth` / `api`) and OAuth entry path when available.
+```
+I want to use Omni-Connector as my AI provider.
+Base URL: http://localhost:1455/v1
+API Key: <YOUR-API-KEY>
+Use model: auto
 
-Response includes:
+<TYPE HERE WHERE YOU WANT TO USE IT (e.g. opencode, cursor, etc.)>
 
-- `strictLiveQuota`: whether strict live-quota routing mode is enabled
-- `providers[].usageConfigured`: whether a provider usage adapter is configured
-- `providers[].oauthOptions[]`: OAuth choices per provider (`id`, `label`, `configured`, `startPath`)
+Set this up exactly as you would an OpenAI-compatible provider.
+Replace any existing base URL and API key with the above.
+Do not change anything else.
 
-## `GET /api/dashboard`
+Please research `https://github.com/omnious0o0/omni-connector` first, especially `docs/`
 
-Headers:
-
-- `X-Omni-Client: dashboard`
-
-Returns connector key, totals, best route target, and linked accounts.
-
-## `POST /api/connector/key/rotate`
-
-Headers:
-
-- `X-Omni-Client: dashboard`
-
-Rotates and returns the connector API key.
-
-## `POST /api/accounts/:accountId/remove`
-
-Headers:
-
-- `X-Omni-Client: dashboard`
-
-Removes the linked account.
-
-## `POST /api/accounts/:accountId/settings`
-
-Headers:
-
-- `X-Omni-Client: dashboard`
-
-Updates account settings.
-
-Body fields:
-
-- `displayName` (string)
-- `manualFiveHourLimit` (number, optional)
-- `manualWeeklyLimit` (number, optional)
-
-Manual limits are accepted only for API-key accounts and only when live usage sync is unavailable.
-
-## `POST /api/accounts/link-api`
-
-Headers:
-
-- `X-Omni-Client: dashboard`
-
-Body:
-
-```json
-{
-  "provider": "gemini",
-  "displayName": "Gemini Workspace",
-  "providerAccountId": "gemini-primary",
-  "apiKey": "your-api-key"
-}
+Note: if the user did not fill in the <> parts, ask them to before proceeding.
 ```
 
-Links or updates an API-key account for the selected provider.
+That's all. The agent will handle the rest.
 
-Optional fields for API-key accounts only:
+---
 
-- `manualFiveHourLimit`
-- `manualWeeklyLimit`
+## Quick Setup
 
-Use manual limits only as a last resort when a provider API-key balance endpoint is unavailable. For OAuth-linked providers with unavailable live usage, the dashboard starts at `N/A` and automatically builds an estimate from routed requests over time.
+> **IMPORTANT:** make sure you've installed omni-connector (see README.md)
 
-## `POST /api/connector/route`
+**1.** Run `omni-connector` to start the server, then navigate to `http://localhost:1455` in your browser to see the dashboard
+**2.** Connect AI providers (via OAuth or API key), and set your preferences via the dashboard.
+**3.** Generate an API key that starts with `omni-`...
+**4.** Use it anywhere (see below)
 
-Headers:
+---
 
-- `Authorization: Bearer <connector-api-key>`
+## Using with a Code SDK
 
-Body:
+Drop-in replacement for any OpenAI-compatible client:
 
-```json
-{
-  "units": 1
-}
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="omni-abc123",
+    base_url="http://localhost:1455/v1"
+)
+
+response = client.chat.completions.create(
+    model="auto",
+    messages=[{"role": "user", "content": "Hello"}]
+)
 ```
 
-Returns the selected account, consumed units, and remaining quota snapshot.
+Works with any library or tool that accepts a custom `base_url`.
 
-When `STRICT_LIVE_QUOTA=true`, returns `503 strict_live_quota_required` if no account has live usage data.
+---
 
-## OAuth entry
+## Using with a Tool or App
 
-- Preferred: `GET /auth/omni/start`
-- Legacy alias: `GET /auth/codex/start`
-- Provider route: `GET /auth/:provider/start`
-- Profile route: `GET /auth/:provider/start?profile=<profile-id>`
-  - Gemini currently exposes `profile=gemini-cli` and `profile=antigravity`
-  - Anthropic currently supports API key linking only
+Most AI-powered tools (like opencode) have a **custom provider** or **"other"** option in settings. Use these values:
+
+| Field | Value |
+|---|---|
+| **API Key** | `omni-abc123` |
+| **Base URL** | `http://localhost:1455/v1` |
+| **Model** | `auto` *(or any model ID below)* |
+
+If the tool asks for an **API type**, select `OpenAI` or `OpenAI-compatible`.
+
+---
+
+## Targeting a Specific Provider or Model
+
+By default, `model: auto` lets Omni pick the best available option. To be more specific:
+
+| Model Value | Behavior |
+|---|---|
+| `auto` | Picks best available across all connected providers |
+| `provider-id` | Best available connection for that provider |
+| `model-id` | Exact model, best matching account |
+
+---
+
+## Custom / Self-Hosted Providers
+
+[coming soon]
+
+---
+
+## How Routing Works
+
+```
+Request arrives
+-> omni-key decoded -> connected providers loaded
+-> filter: which can serve this request?
+-> pick best match (quota, latency, cost, preference)
+-> translate to provider's native format
+-> call provider
+-> if fail -> fallback to next best
+-> translate response back to OpenAI format
+-> return
+```
+
+---
+
+## Errors
+
+| Code | Meaning |
+|---|---|
+| `401` | Invalid or expired omni-key |
+| `503` | No providers available, all down or quota exhausted |
+
+On `503`, the response body includes a per-provider failure breakdown.
+
+---
+
+## Endpoint Reference
+
+```
+POST http://localhost:1455/v1/chat/completions
+Authorization: Bearer omni-abc123
+Content-Type: application/json
+```

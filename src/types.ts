@@ -36,6 +36,14 @@ export interface AccountQuotaState {
   weekly: QuotaWindowState;
 }
 
+export interface QuotaSyncIssue {
+  kind: "account_verification_required";
+  title: string;
+  steps: string[];
+  actionLabel: string;
+  actionUrl: string;
+}
+
 export interface ConnectedAccount {
   id: string;
   provider: ProviderId;
@@ -52,6 +60,7 @@ export interface ConnectedAccount {
   quotaSyncedAt?: string | null;
   quotaSyncStatus?: "live" | "stale" | "unavailable";
   quotaSyncError?: string | null;
+  quotaSyncIssue?: QuotaSyncIssue | null;
   estimatedUsageSampleCount?: number;
   estimatedUsageTotalUnits?: number;
   estimatedUsageUpdatedAt?: string | null;
@@ -85,6 +94,7 @@ export interface OAuthLinkedAccountPayload {
   quotaSyncedAt?: string | null;
   quotaSyncStatus?: "live" | "stale" | "unavailable";
   quotaSyncError?: string | null;
+  quotaSyncIssue?: QuotaSyncIssue | null;
   planType?: string | null;
   creditsBalance?: string | null;
   quota: {
@@ -144,6 +154,7 @@ export interface DashboardAccount {
   quotaSyncedAt?: string | null;
   quotaSyncStatus?: "live" | "stale" | "unavailable";
   quotaSyncError?: string | null;
+  quotaSyncIssue?: QuotaSyncIssue | null;
   estimatedUsageSampleCount?: number;
   estimatedUsageTotalUnits?: number;
   estimatedUsageUpdatedAt?: string | null;

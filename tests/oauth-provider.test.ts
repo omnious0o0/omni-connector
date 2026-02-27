@@ -177,6 +177,7 @@ test("exchangeCodeFor gemini-cli uses post-auth project id override for Google p
     assert.equal(linked.provider, "gemini");
     assert.equal(linked.oauthProfileId, "gemini-cli");
     assert.equal(linked.providerAccountId, "gemini-project-from-load-code-assist");
+    assert.equal(linked.quotaSyncedAt, null);
     assert.equal(fetchCalls.includes(loadCodeAssistUrl), true);
   } finally {
     globalThis.fetch = originalFetch;
@@ -191,4 +192,104 @@ test("redirectUriFor uses Google-compatible loopback callback for gemini", () =>
   assert.equal(service.redirectUriFor("gemini", "gemini-cli"), "http://127.0.0.1:1455/oauth2callback");
   assert.equal(service.redirectUriFor("gemini", "antigravity"), "http://127.0.0.1:1455/oauth2callback");
   assert.equal(service.redirectUriFor("codex", "oauth"), "http://localhost:1455/auth/callback");
+});
+
+test("redirectUriFor enforces canonical localhost callback for default Codex client", () => {
+  const service = createService({
+    oauthRedirectUri: "http://127.0.0.1:1455/auth/callback",
+  });
+
+  assert.equal(service.redirectUriFor("codex", "oauth"), "http://localhost:1455/auth/callback");
+});
+
+test("redirectUriFor keeps configured callback for custom Codex client", () => {
+  const service = createService({
+    oauthClientId: "custom-codex-client-id",
+    oauthRedirectUri: "http://127.0.0.1:1455/auth/callback",
+  });
+
+  assert.equal(service.redirectUriFor("codex", "oauth"), "http://127.0.0.1:1455/auth/callback");
+});
+
+test("refreshAccessTokenFor refreshes Gemini OAuth tokens with profile-specific client credentials", async () => {
+  const defaults = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    DATA_FILE: path.join(os.tmpdir(), `omni-oauth-provider-test-${Date.now()}-${Math.random()}.json`),
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    OAUTH_REQUIRE_QUOTA: "false",
+    DEFAULT_FIVE_HOUR_LIMIT: "0",
+    DEFAULT_WEEKLY_LIMIT: "0",
+    DEFAULT_FIVE_HOUR_USED: "0",
+    DEFAULT_WEEKLY_USED: "0",
+  });
+
+  const service = createService({
+    oauthProfiles: {
+      ...defaults.oauthProfiles,
+      gemini: [
+        {
+          id: "gemini-cli",
+          label: "Gemini CLI",
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+          tokenUrl: "https://oauth2.googleapis.com/token",
+          userInfoUrl: "https://openidconnect.googleapis.com/v1/userinfo",
+          clientId: "gemini-refresh-client-id",
+          clientSecret: "gemini-refresh-client-secret",
+          scopes: ["openid", "email", "profile"],
+          originator: null,
+          extraParams: {},
+        },
+      ],
+    },
+  });
+
+  const originalFetch = globalThis.fetch;
+  let observedBody = "";
+
+  const mockedFetch: typeof fetch = async (input, init) => {
+    const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+    if (url !== "https://oauth2.googleapis.com/token") {
+      throw new Error(`Unexpected fetch call during gemini refresh test: ${url}`);
+    }
+
+    observedBody = init?.body instanceof URLSearchParams ? init.body.toString() : String(init?.body ?? "");
+
+    return new Response(
+      JSON.stringify({
+        access_token: "gemini-access-token-refreshed",
+        refresh_token: "gemini-refresh-token-rotated",
+        expires_in: 1800,
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  globalThis.fetch = mockedFetch;
+
+  try {
+    const refreshed = await service.refreshAccessTokenFor("gemini", "gemini-cli", "gemini-refresh-token");
+
+    assert.equal(refreshed.accessToken, "gemini-access-token-refreshed");
+    assert.equal(refreshed.refreshToken, "gemini-refresh-token-rotated");
+    assert.equal(observedBody.includes("grant_type=refresh_token"), true);
+    assert.equal(observedBody.includes("refresh_token=gemini-refresh-token"), true);
+    assert.equal(observedBody.includes("client_id=gemini-refresh-client-id"), true);
+    assert.equal(observedBody.includes("client_secret=gemini-refresh-client-secret"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("refreshAccessTokenFor rejects missing OAuth profile id for non-codex providers", async () => {
+  const service = createService();
+
+  await assert.rejects(
+    () => service.refreshAccessTokenFor("gemini", undefined, "refresh-token"),
+    (error: unknown) => error instanceof HttpError && error.status === 400 && error.code === "missing_oauth_profile",
+  );
 });

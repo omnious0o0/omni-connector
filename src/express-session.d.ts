@@ -9,6 +9,11 @@ interface OAuthPendingFlowSessionState {
   createdAt: string;
 }
 
+interface VerificationPendingFlowSessionState {
+  accountId: string;
+  createdAt: string;
+}
+
 declare module "express-session" {
   interface SessionData {
     oauthState?: string;
@@ -18,6 +23,8 @@ declare module "express-session" {
     oauthProfileId?: string;
     oauthPendingFlows?: Record<string, OAuthPendingFlowSessionState>;
     oauthLastCompletedState?: string;
+    verificationPendingFlows?: Record<string, VerificationPendingFlowSessionState>;
+    verificationLastCompletedState?: string;
     dashboardAuthorized?: boolean;
   }
 }

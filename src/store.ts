@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { PersistedData } from "./types";
+import { PersistedData, ProviderId, RoutingPreferences, createDefaultRoutingPreferences } from "./types";
 
 const SECRET_PREFIX = "enc:v1:";
 const SECRET_KEY_BYTES = 32;
+const MAX_ROUTING_PRIORITY_MODELS = 20;
+const MAX_ROUTING_MODEL_LENGTH = 120;
+const VALID_PROVIDER_IDS = new Set<ProviderId>(["codex", "gemini", "claude", "openrouter"]);
 
 function errnoCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
@@ -21,7 +24,81 @@ function shouldIgnoreChmodError(error: unknown): boolean {
 }
 
 export function createConnectorApiKey(): string {
-  return `cxk_${crypto.randomBytes(24).toString("hex")}`;
+  return `omni-${crypto.randomBytes(24).toString("hex")}`;
+}
+
+function asProviderId(input: unknown): ProviderId | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+
+  const normalized = input.trim().toLowerCase();
+  if (!VALID_PROVIDER_IDS.has(normalized as ProviderId)) {
+    return null;
+  }
+
+  return normalized as ProviderId;
+}
+
+function sanitizeRoutingPreferences(input: unknown): RoutingPreferences {
+  const defaults = createDefaultRoutingPreferences();
+  const record =
+    input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
+
+  const preferredRaw = record?.preferredProvider;
+  const preferredProvider =
+    typeof preferredRaw === "string" && preferredRaw.trim().toLowerCase() === "auto"
+      ? "auto"
+      : asProviderId(preferredRaw) ?? defaults.preferredProvider;
+
+  const fallbackProviders: ProviderId[] = [];
+  const fallbackRaw = Array.isArray(record?.fallbackProviders) ? record?.fallbackProviders : [];
+  for (const entry of fallbackRaw) {
+    const providerId = asProviderId(entry);
+    if (!providerId) {
+      continue;
+    }
+
+    if (preferredProvider !== "auto" && providerId === preferredProvider) {
+      continue;
+    }
+
+    if (!fallbackProviders.includes(providerId)) {
+      fallbackProviders.push(providerId);
+    }
+  }
+
+  const priorityModels: string[] = [];
+  const priorityModelsRaw = Array.isArray(record?.priorityModels) ? record?.priorityModels : [];
+  for (const entry of priorityModelsRaw) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+
+    const model = entry.trim();
+    if (model.length === 0) {
+      continue;
+    }
+
+    const clipped = model.slice(0, MAX_ROUTING_MODEL_LENGTH);
+    if (!priorityModels.includes(clipped)) {
+      priorityModels.push(clipped);
+    }
+
+    if (priorityModels.length >= MAX_ROUTING_PRIORITY_MODELS) {
+      break;
+    }
+  }
+
+  if (priorityModels.length === 0) {
+    priorityModels.push("auto");
+  }
+
+  return {
+    preferredProvider,
+    fallbackProviders,
+    priorityModels,
+  };
 }
 
 function createDefaultStore(): PersistedData {
@@ -32,6 +109,7 @@ function createDefaultStore(): PersistedData {
       apiKey: createConnectorApiKey(),
       createdAt: now,
       lastRotatedAt: now,
+      routingPreferences: createDefaultRoutingPreferences(),
     },
     accounts: [],
   };
@@ -121,13 +199,27 @@ export class DataStore {
       return this.recoverFromCorruptStore();
     }
 
-    const { value, migrated } = decrypted;
-    if (migrated) {
+    const normalized = this.normalizePersistedData(decrypted.value);
+    const value = normalized.value;
+    if (decrypted.migrated || normalized.migrated) {
       this.state = value;
       this.persist();
     }
 
     return value;
+  }
+
+  private normalizePersistedData(data: PersistedData): { value: PersistedData; migrated: boolean } {
+    const clone = structuredClone(data);
+    const currentPreferences = (clone.connector as { routingPreferences?: unknown }).routingPreferences;
+    const nextPreferences = sanitizeRoutingPreferences(currentPreferences);
+    const migrated = JSON.stringify(currentPreferences ?? null) !== JSON.stringify(nextPreferences);
+    clone.connector.routingPreferences = nextPreferences;
+
+    return {
+      value: clone,
+      migrated,
+    };
   }
 
   private decryptPersistedData(data: PersistedData): { value: PersistedData; migrated: boolean } {

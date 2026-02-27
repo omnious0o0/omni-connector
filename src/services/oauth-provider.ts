@@ -494,6 +494,23 @@ export class OAuthProviderService {
     return profile;
   }
 
+  private resolveRefreshProfileId(providerId: ProviderId, profileId: string | undefined): string {
+    if (providerId === "codex") {
+      return profileId?.trim() || CODEX_OAUTH_PROFILE_ID;
+    }
+
+    const normalizedProfileId = profileId?.trim() ?? "";
+    if (!normalizedProfileId) {
+      throw new HttpError(
+        400,
+        "missing_oauth_profile",
+        `OAuth profile is required to refresh ${providerId} access tokens. Reconnect this account.`,
+      );
+    }
+
+    return normalizedProfileId;
+  }
+
   public redirectUri(): string {
     return this.config.oauthRedirectUri;
   }
@@ -861,12 +878,56 @@ export class OAuthProviderService {
     refreshToken: string | null;
     tokenExpiresAt: string;
   }> {
-    const tokenPayload = await this.fetchRefreshToken(refreshToken);
+    return this.refreshAccessTokenFor("codex", CODEX_OAUTH_PROFILE_ID, refreshToken);
+  }
+
+  public async refreshAccessTokenFor(
+    providerId: ProviderId,
+    profileId: string | undefined,
+    refreshToken: string,
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string | null;
+    tokenExpiresAt: string;
+  }> {
+    const resolvedProfileId = this.resolveRefreshProfileId(providerId, profileId);
+    const tokenPayload =
+      providerId === "codex" && resolvedProfileId === CODEX_OAUTH_PROFILE_ID
+        ? await this.fetchRefreshToken(refreshToken)
+        : await this.fetchRefreshTokenForProvider(providerId, resolvedProfileId, refreshToken);
+
     return {
       accessToken: tokenPayload.accessToken,
       refreshToken: tokenPayload.refreshToken,
       tokenExpiresAt: tokenPayload.tokenExpiresAt,
     };
+  }
+
+  private async fetchRefreshTokenForProvider(
+    providerId: ProviderId,
+    profileId: string,
+    refreshToken: string,
+  ): Promise<TokenPayload> {
+    const profile = this.resolveProfile(providerId, profileId);
+    this.assertOAuthProfileConfigured(providerId, profileId);
+    return this.fetchRefreshTokenForProfile(profile, refreshToken);
+  }
+
+  private async fetchRefreshTokenForProfile(
+    profile: OAuthProviderProfileConfig,
+    refreshToken: string,
+  ): Promise<TokenPayload> {
+    const form = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: profile.clientId,
+    });
+
+    if (profile.clientSecret) {
+      form.set("client_secret", profile.clientSecret);
+    }
+
+    return this.postTokenRequestWithUrl(profile.tokenUrl, form);
   }
 
   public async fetchLiveQuotaSnapshot(

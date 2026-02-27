@@ -1,5 +1,8 @@
 import { resilientFetch } from "../http-resilience";
 
+const GEMINI_CODE_ASSIST_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const GEMINI_CODE_ASSIST_API_VERSION = "v1internal";
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -15,6 +18,19 @@ function asString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function sanitizeErrorForLog(error: unknown): string {
+  const rawMessage =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message
+      : "unknown error";
+
+  const normalized = rawMessage.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized
+    .replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi, "$1[redacted]")
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]")
+    .slice(0, 220);
 }
 
 function deepFindFirstString(payload: unknown, keys: Set<string>): string | null {
@@ -56,6 +72,10 @@ function deepFindFirstString(payload: unknown, keys: Set<string>): string | null
 
 function resolveGoogleCloudProjectId(): string | null {
   return asString(process.env.GOOGLE_CLOUD_PROJECT_ID) ?? asString(process.env.GOOGLE_CLOUD_PROJECT) ?? null;
+}
+
+interface GeminiCodeAssistProjectOptions {
+  preferredProjectId?: string | null;
 }
 
 function pickGeminiCompanionProjectId(value: unknown): string | null {
@@ -100,9 +120,17 @@ export function extractGeminiCliProjectId(payload: unknown): string | null {
   return deepFindFirstString(record, new Set(["projectid", "project_id", "cloudaicompanionproject", "cloudaicompanion_project"]));
 }
 
-export async function fetchGeminiCliProjectId(accessToken: string): Promise<string | null> {
-  const endpoint = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-  const configuredProjectId = resolveGoogleCloudProjectId();
+export async function fetchGeminiCliProjectId(
+  accessToken: string,
+  options: GeminiCodeAssistProjectOptions = {},
+): Promise<string | null> {
+  const baseUrl = asString(process.env.CODE_ASSIST_ENDPOINT) ?? GEMINI_CODE_ASSIST_BASE_URL;
+  const apiVersion = asString(process.env.CODE_ASSIST_API_VERSION) ?? GEMINI_CODE_ASSIST_API_VERSION;
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  const normalizedVersion = apiVersion.replace(/^\/+|\/+$/g, "");
+  const endpoint = `${normalizedBase}/${normalizedVersion}:loadCodeAssist`;
+  const preferredProjectId = asString(options.preferredProjectId ?? null) ?? null;
+  const configuredProjectId = preferredProjectId ?? resolveGoogleCloudProjectId();
   const metadata: Record<string, string> = {
     ideType: "IDE_UNSPECIFIED",
     platform: "PLATFORM_UNSPECIFIED",
@@ -140,11 +168,18 @@ export async function fetchGeminiCliProjectId(accessToken: string): Promise<stri
         maxDelayMs: 1_200,
       },
     );
-  } catch {
+  } catch (error) {
+    const message = sanitizeErrorForLog(error);
+    process.stderr.write(
+      `Gemini Code Assist project discovery failed; using configured project fallback: ${message}\n`,
+    );
     return configuredProjectId;
   }
 
   if (!response.ok) {
+    process.stderr.write(
+      `Gemini Code Assist project discovery returned status ${response.status}; using configured project fallback.\n`,
+    );
     return configuredProjectId;
   }
 

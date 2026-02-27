@@ -1,6 +1,7 @@
 export { buildClaudeAuthorizationCodeTokenPayload } from "./claude";
 export {
   buildCodexOAuthProfile,
+  CODEX_DEFAULT_CLIENT_ID,
   CODEX_OAUTH_PROFILE_ID,
   codexUsageCandidateUrls,
   extractCodexRateLimitPayload,

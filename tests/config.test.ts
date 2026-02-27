@@ -168,6 +168,24 @@ test("defaults data file path to home runtime directory when DATA_FILE is unset"
   assert.equal(config.dataFilePath, path.join(os.homedir(), ".omni-connector", "data", "store.json"));
 });
 
+test("uses canonical localhost default OAuth redirect URI", () => {
+  const ipv4Config = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+  });
+  assert.equal(ipv4Config.oauthRedirectUri, "http://localhost:1455/auth/callback");
+
+  const localhostConfig = resolveConfig({
+    HOST: "localhost",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+  });
+  assert.equal(localhostConfig.oauthRedirectUri, "http://localhost:1455/auth/callback");
+});
+
 test("requires loopback OAuth redirect URI when remote dashboard is disabled", () => {
   assert.throws(
     () =>

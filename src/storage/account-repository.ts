@@ -51,8 +51,8 @@ function matchesLinkedOAuthIdentity(
   return accountDisplayName === payloadDisplayName;
 }
 
-const API_DEFAULT_FIVE_HOUR_LIMIT = 50_000;
-const API_DEFAULT_WEEKLY_LIMIT = 500_000;
+const API_DEFAULT_FIVE_HOUR_LIMIT = 0;
+const API_DEFAULT_WEEKLY_LIMIT = 0;
 const API_DEFAULT_TOKEN_EXPIRES_AT = "2999-01-01T00:00:00.000Z";
 
 export class AccountRepository {
@@ -122,6 +122,7 @@ export class AccountRepository {
         existingAccount.quotaSyncStatus =
           payload.quotaSyncStatus ?? existingAccount.quotaSyncStatus ?? "unavailable";
         existingAccount.quotaSyncError = payload.quotaSyncError ?? null;
+        existingAccount.quotaSyncIssue = payload.quotaSyncIssue ?? null;
         existingAccount.planType = payload.planType ?? existingAccount.planType ?? null;
         existingAccount.creditsBalance = payload.creditsBalance ?? existingAccount.creditsBalance ?? null;
         existingAccount.quota.fiveHour.limit = payload.quota.fiveHourLimit;
@@ -167,6 +168,7 @@ export class AccountRepository {
         quotaSyncedAt: payload.quotaSyncedAt ?? null,
         quotaSyncStatus: payload.quotaSyncStatus ?? "unavailable",
         quotaSyncError: payload.quotaSyncError ?? null,
+        quotaSyncIssue: payload.quotaSyncIssue ?? null,
         estimatedUsageSampleCount: 0,
         estimatedUsageTotalUnits: 0,
         estimatedUsageUpdatedAt: null,
@@ -240,6 +242,7 @@ export class AccountRepository {
         existingAccount.quotaSyncedAt = null;
         existingAccount.quotaSyncStatus = strictLiveQuota ? "unavailable" : "stale";
         existingAccount.quotaSyncError = null;
+        existingAccount.quotaSyncIssue = null;
         existingAccount.planType = null;
         existingAccount.creditsBalance = null;
         existingAccount.quota.fiveHour.limit =
@@ -291,6 +294,7 @@ export class AccountRepository {
         quotaSyncedAt: null,
         quotaSyncStatus: strictLiveQuota ? "unavailable" : "stale",
         quotaSyncError: null,
+        quotaSyncIssue: null,
         planType: null,
         creditsBalance: null,
         quota: {

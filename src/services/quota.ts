@@ -111,6 +111,7 @@ export function toDashboardAccount(account: ConnectedAccount): DashboardAccount 
     quotaSyncedAt: account.quotaSyncedAt ?? null,
     quotaSyncStatus: account.quotaSyncStatus ?? "unavailable",
     quotaSyncError: account.quotaSyncError ?? null,
+    quotaSyncIssue: account.quotaSyncIssue ?? null,
     estimatedUsageSampleCount: account.estimatedUsageSampleCount ?? 0,
     estimatedUsageTotalUnits: account.estimatedUsageTotalUnits ?? 0,
     estimatedUsageUpdatedAt: account.estimatedUsageUpdatedAt ?? null,

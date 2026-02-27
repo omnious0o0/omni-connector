@@ -58,6 +58,10 @@ const accountSettingsProviderAccountElement = document.querySelector("#account-s
 const accountSettingsOAuthProfileWrapperElement = document.querySelector("#account-settings-oauth-profile-wrapper");
 const accountSettingsOAuthProfileElement = document.querySelector("#account-settings-oauth-profile");
 const accountSettingsSyncStatusElement = document.querySelector("#account-settings-sync-status");
+const accountSettingsSyncGuidanceElement = document.querySelector("#account-settings-sync-guidance");
+const accountSettingsSyncGuidanceTitleElement = document.querySelector("#account-settings-sync-guidance-title");
+const accountSettingsSyncGuidanceStepsElement = document.querySelector("#account-settings-sync-guidance-steps");
+const accountSettingsSyncGuidanceActionElement = document.querySelector("#account-settings-sync-guidance-action");
 const accountSettingsDisplayNameInput = document.querySelector("#account-settings-display-name");
 const accountSettingsApiLimitsElement = document.querySelector("#account-settings-api-limits");
 const accountSettingsFiveHourInput = document.querySelector("#account-settings-5h");
@@ -1465,6 +1469,75 @@ function renderQuotaWindowBlock(windowView) {
   `;
 }
 
+function normalizeQuotaSyncIssue(rawIssue) {
+  if (!rawIssue || typeof rawIssue !== "object" || Array.isArray(rawIssue)) {
+    return null;
+  }
+
+  if (rawIssue.kind !== "account_verification_required") {
+    return null;
+  }
+
+  const title = typeof rawIssue.title === "string" ? rawIssue.title.trim() : "";
+  const actionLabel = typeof rawIssue.actionLabel === "string" ? rawIssue.actionLabel.trim() : "";
+  const actionUrl = typeof rawIssue.actionUrl === "string" ? rawIssue.actionUrl.trim() : "";
+  const steps = Array.isArray(rawIssue.steps)
+    ? rawIssue.steps
+        .filter((step) => typeof step === "string")
+        .map((step) => step.trim())
+        .filter((step) => step.length > 0)
+    : [];
+
+  if (!title || !actionLabel || !actionUrl || steps.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "account_verification_required",
+    title,
+    steps,
+    actionLabel,
+    actionUrl,
+  };
+}
+
+function verificationStartPath(accountId) {
+  if (typeof accountId !== "string") {
+    return null;
+  }
+
+  const normalized = accountId.trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return `/verification/start?accountId=${encodeURIComponent(normalized)}`;
+}
+
+function renderQuotaSyncIssueMarkup(syncIssue, accountId) {
+  if (!syncIssue) {
+    return "";
+  }
+
+  const startPath = verificationStartPath(accountId);
+  if (!startPath) {
+    return "";
+  }
+
+  const stepsMarkup = syncIssue.steps
+    .slice(0, 3)
+    .map((step) => `<li>${escapeHtml(step)}</li>`)
+    .join("");
+
+  return `
+    <div class="account-sync-guidance">
+      <p class="account-sync-guidance-title">${escapeHtml(syncIssue.title)}</p>
+      <ul class="account-sync-guidance-steps">${stepsMarkup}</ul>
+      <a class="btn btn-outline account-verify-action" href="${escapeHtml(startPath)}">${escapeHtml(syncIssue.actionLabel)}</a>
+    </div>
+  `;
+}
+
 function renderAccounts(accounts) {
   if (!accountsListElement) return;
 
@@ -1492,9 +1565,13 @@ function renderAccounts(accounts) {
       const providerIdentity = providerIdentityForAccount(account);
       const stateDot = accountStateIndicator(account, quotaWindows);
       const syncError = typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
+      const syncIssue = normalizeQuotaSyncIssue(account.quotaSyncIssue);
       const showSyncError = account.quotaSyncStatus !== "live" && syncError.length > 0;
       const estimateNote = usageEstimateNote(account);
-      const errorLine = showSyncError ? `<div class="account-error-msg">${escapeHtml(syncError)}</div>` : "";
+      const guidanceMarkup = showSyncError ? renderQuotaSyncIssueMarkup(syncIssue, account.id) : "";
+      const errorLine = showSyncError
+        ? `<div class="account-error-msg"><p class="account-error-text">${escapeHtml(syncError)}</p>${guidanceMarkup}</div>`
+        : "";
       const estimateLine =
         estimateNote && estimateNote.trim().length > 0
           ? `<div class="account-note-msg">${escapeHtml(estimateNote)}</div>`
@@ -2037,6 +2114,44 @@ function syncStatusLabel(account) {
   return status;
 }
 
+function renderAccountSettingsSyncGuidance(account) {
+  if (!(accountSettingsSyncGuidanceElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const syncIssue = normalizeQuotaSyncIssue(account?.quotaSyncIssue);
+  const startPath = verificationStartPath(account?.id);
+  if (!syncIssue || !startPath) {
+    accountSettingsSyncGuidanceElement.hidden = true;
+    if (accountSettingsSyncGuidanceTitleElement instanceof HTMLElement) {
+      accountSettingsSyncGuidanceTitleElement.textContent = "";
+    }
+    if (accountSettingsSyncGuidanceStepsElement instanceof HTMLElement) {
+      accountSettingsSyncGuidanceStepsElement.innerHTML = "";
+    }
+    if (accountSettingsSyncGuidanceActionElement instanceof HTMLAnchorElement) {
+      accountSettingsSyncGuidanceActionElement.href = "#";
+      accountSettingsSyncGuidanceActionElement.textContent = "";
+    }
+    return;
+  }
+
+  accountSettingsSyncGuidanceElement.hidden = false;
+  if (accountSettingsSyncGuidanceTitleElement instanceof HTMLElement) {
+    accountSettingsSyncGuidanceTitleElement.textContent = syncIssue.title;
+  }
+  if (accountSettingsSyncGuidanceStepsElement instanceof HTMLElement) {
+    accountSettingsSyncGuidanceStepsElement.innerHTML = syncIssue.steps
+      .slice(0, 3)
+      .map((step) => `<li>${escapeHtml(step)}</li>`)
+      .join("");
+  }
+  if (accountSettingsSyncGuidanceActionElement instanceof HTMLAnchorElement) {
+    accountSettingsSyncGuidanceActionElement.href = startPath;
+    accountSettingsSyncGuidanceActionElement.textContent = syncIssue.actionLabel;
+  }
+}
+
 function openAccountSettingsModal(accountId) {
   if (!(accountSettingsModalElement instanceof HTMLElement)) {
     return;
@@ -2074,6 +2189,7 @@ function openAccountSettingsModal(accountId) {
   if (accountSettingsSyncStatusElement instanceof HTMLElement) {
     accountSettingsSyncStatusElement.textContent = syncStatusLabel(account);
   }
+  renderAccountSettingsSyncGuidance(account);
 
   if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
     accountSettingsDisplayNameInput.value = account.displayName;
@@ -2134,6 +2250,9 @@ function closeAccountSettingsModal() {
   selectedAccountSettingsId = null;
   if (accountSettingsForm instanceof HTMLFormElement) {
     accountSettingsForm.reset();
+  }
+  if (accountSettingsSyncGuidanceElement instanceof HTMLElement) {
+    accountSettingsSyncGuidanceElement.hidden = true;
   }
 
   if (accountSettingsPreviousFocus instanceof HTMLElement) {
@@ -2508,9 +2627,21 @@ async function removeAccount(accountId) {
 
 function checkConnectionToast() {
   const params = new URLSearchParams(window.location.search);
+  let shouldRewriteUrl = false;
+
   if (params.get("connected") === "1") {
     showToast("Account connected successfully.");
     params.delete("connected");
+    shouldRewriteUrl = true;
+  }
+
+  if (params.get("verified") === "1") {
+    showToast("Verification step completed. Syncing quota now.");
+    params.delete("verified");
+    shouldRewriteUrl = true;
+  }
+
+  if (shouldRewriteUrl) {
     const nextQuery = params.toString();
     const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
     window.history.replaceState({}, "", nextUrl);
