@@ -8,6 +8,7 @@ import {
 import { resilientFetch } from "./http-resilience";
 
 const PROVIDER_ORDER: ProviderId[] = ["codex", "gemini", "claude", "openrouter"];
+const CODEX_MODELS_CLIENT_VERSION = "0.99.0";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -150,68 +151,73 @@ export class ProviderModelsService {
   }
 
   private async fetchCodexModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
+    const authMethod = account.authMethod ?? "oauth";
+    if (authMethod === "oauth") {
+      return await this.fetchCodexOauthModels(account, accessToken);
+    }
+
     const openAiLikeEndpoint = buildUrlWithPath(this.config.providerInferenceBaseUrls.codex, "models");
-    let primaryAttempt: string[] = [];
-    let lastError: Error | null = null;
-    try {
-      primaryAttempt = await this.fetchModelsFromEndpoint(openAiLikeEndpoint, {
-        ...this.baseJsonHeaders(),
-        Authorization: `Bearer ${accessToken}`,
-      });
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error("request failed");
-    }
-
-    if (primaryAttempt.length > 0) {
-      return primaryAttempt;
-    }
-
-    if ((account.authMethod ?? "oauth") !== "oauth") {
-      if (lastError) {
-        throw lastError;
-      }
-
+    const modelIds = await this.fetchModelsFromEndpoint(openAiLikeEndpoint, {
+      ...this.baseJsonHeaders(),
+      Authorization: `Bearer ${accessToken}`,
+    });
+    if (modelIds.length === 0) {
       throw new Error("no models returned by provider");
     }
 
-    const oauthHeaders: Record<string, string> = {
+    return modelIds;
+  }
+
+  private async fetchCodexOauthModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
+    const headers: Record<string, string> = {
       ...this.baseJsonHeaders(),
       Authorization: `Bearer ${accessToken}`,
     };
     if (account.chatgptAccountId) {
-      oauthHeaders["ChatGPT-Account-Id"] = account.chatgptAccountId;
+      headers["ChatGPT-Account-Id"] = account.chatgptAccountId;
     }
 
-    const oauthEndpoints = this.codexOauthModelEndpoints();
-    for (const endpoint of oauthEndpoints) {
-      try {
-        const modelIds = await this.fetchModelsFromEndpoint(endpoint, oauthHeaders);
-        if (modelIds.length > 0) {
-          return modelIds;
-        }
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error("request failed");
+    const endpoint = buildUrlWithPath(this.config.codexChatgptBaseUrl, "models");
+    const endpointWithVersion = `${endpoint}?client_version=${encodeURIComponent(CODEX_MODELS_CLIENT_VERSION)}`;
+    const payload = await this.fetchJson(endpointWithVersion, headers);
+    const modelIds = this.extractCodexOauthModelIds(payload);
+    if (modelIds.length === 0) {
+      throw new Error("no codex oauth models returned by provider");
+    }
+
+    return modelIds;
+  }
+
+  private extractCodexOauthModelIds(payload: unknown): string[] {
+    const root = asRecord(payload);
+    if (!root) {
+      return [];
+    }
+
+    const models = asArray(root.models);
+    const modelIds = new Set<string>();
+    for (const modelEntry of models) {
+      const record = asRecord(modelEntry);
+      if (!record) {
+        continue;
+      }
+
+      if (record.supported_in_api !== true) {
+        continue;
+      }
+
+      const slug = asString(record.slug);
+      if (!slug) {
+        continue;
+      }
+
+      const normalized = normalizeModelId(slug);
+      if (normalized) {
+        modelIds.add(normalized);
       }
     }
 
-    if (lastError) {
-      throw lastError;
-    }
-
-    throw new Error("no models returned by provider");
-  }
-
-  private codexOauthModelEndpoints(): string[] {
-    const endpoints = new Set<string>();
-    endpoints.add(buildUrlWithPath(this.config.codexChatgptBaseUrl, "models"));
-
-    const parsed = new URL(this.config.codexChatgptBaseUrl);
-    const rootBackend = new URL(parsed.origin);
-    rootBackend.pathname = "/backend-api/models";
-    rootBackend.search = "";
-    endpoints.add(rootBackend.toString());
-
-    return [...endpoints];
+    return sortModelIds(modelIds);
   }
 
   private async fetchGeminiModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
