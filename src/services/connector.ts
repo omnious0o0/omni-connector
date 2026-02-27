@@ -648,6 +648,30 @@ export class ConnectorService {
               return;
             }
 
+            const clearLegacyPlaceholderQuota = isLegacyGeminiPlaceholderQuota(account);
+            if (clearLegacyPlaceholderQuota) {
+              account.quota.fiveHour.limit = 0;
+              account.quota.fiveHour.used = 0;
+              account.quota.fiveHour.mode = "units";
+              account.quota.fiveHour.windowStartedAt = nowIso;
+              account.quota.fiveHour.resetsAt = null;
+
+              account.quota.weekly.limit = 0;
+              account.quota.weekly.used = 0;
+              account.quota.weekly.mode = "units";
+              account.quota.weekly.windowStartedAt = nowIso;
+              account.quota.weekly.resetsAt = null;
+
+              account.estimatedUsageSampleCount = 0;
+              account.estimatedUsageTotalUnits = 0;
+              account.estimatedUsageUpdatedAt = null;
+              account.quotaSyncStatus = "unavailable";
+              account.quotaSyncError = null;
+              account.quotaSyncedAt = nowIso;
+              account.updatedAt = nowIso;
+              return;
+            }
+
             account.quotaSyncStatus = this.strictLiveQuota ? "unavailable" : "stale";
             account.quotaSyncError = "Live usage endpoint returned no usable quota data.";
             account.quotaSyncedAt = nowIso;
@@ -691,6 +715,30 @@ export class ConnectorService {
         this.accounts.update((draft) => {
           const account = draft.accounts.find((candidate) => candidate.id === target.id);
           if (!account) {
+            return;
+          }
+
+          const clearLegacyPlaceholderQuota = isLegacyGeminiPlaceholderQuota(account);
+          if (clearLegacyPlaceholderQuota) {
+            account.quota.fiveHour.limit = 0;
+            account.quota.fiveHour.used = 0;
+            account.quota.fiveHour.mode = "units";
+            account.quota.fiveHour.windowStartedAt = nowIso;
+            account.quota.fiveHour.resetsAt = null;
+
+            account.quota.weekly.limit = 0;
+            account.quota.weekly.used = 0;
+            account.quota.weekly.mode = "units";
+            account.quota.weekly.windowStartedAt = nowIso;
+            account.quota.weekly.resetsAt = null;
+
+            account.estimatedUsageSampleCount = 0;
+            account.estimatedUsageTotalUnits = 0;
+            account.estimatedUsageUpdatedAt = null;
+            account.quotaSyncStatus = "unavailable";
+            account.quotaSyncError = null;
+            account.quotaSyncedAt = nowIso;
+            account.updatedAt = nowIso;
             return;
           }
 

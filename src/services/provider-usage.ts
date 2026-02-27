@@ -3,6 +3,9 @@ import { HttpError } from "../errors";
 import { ConnectedAccount, ProviderId, QuotaWindowMode } from "../types";
 import { resilientFetch } from "./http-resilience";
 
+const GEMINI_CODE_ASSIST_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const GEMINI_CODE_ASSIST_API_VERSION = "v1internal";
+
 interface LiveQuotaWindowSnapshot {
   limit: number;
   used: number;
@@ -114,6 +117,28 @@ function errorMessage(error: unknown, fallback: string): string {
   }
 
   return redact(fallback);
+}
+
+function extractUpstreamError(payload: unknown): string | null {
+  const root = asRecord(payload);
+  if (!root) {
+    return null;
+  }
+
+  const directMessage = asString(root.message);
+  const errorValue = root.error;
+  if (typeof errorValue === "string") {
+    return asString(errorValue);
+  }
+
+  const errorRecord = asRecord(errorValue);
+  if (!errorRecord) {
+    return directMessage;
+  }
+
+  const message = asString(errorRecord.message);
+  const status = asString(errorRecord.status);
+  return message ?? directMessage ?? status;
 }
 
 function fallbackWindowFromAccount(
@@ -396,6 +421,171 @@ function parseJsonTotals(payload: unknown, fallbackLimit: number): ParsedWindowT
 export class ProviderUsageService {
   public constructor(private readonly config: AppConfig) {}
 
+  private isGeminiOauthAccount(account: ConnectedAccount): boolean {
+    return account.provider === "gemini" && (account.authMethod ?? "oauth") === "oauth";
+  }
+
+  private geminiCodeAssistQuotaEndpoint(): string {
+    const baseUrl = asString(process.env.CODE_ASSIST_ENDPOINT) ?? GEMINI_CODE_ASSIST_BASE_URL;
+    const apiVersion = asString(process.env.CODE_ASSIST_API_VERSION) ?? GEMINI_CODE_ASSIST_API_VERSION;
+    const normalizedBase = baseUrl.replace(/\/+$/, "");
+    const normalizedVersion = apiVersion.replace(/^\/+|\/+$/g, "");
+    return `${normalizedBase}/${normalizedVersion}:retrieveUserQuota`;
+  }
+
+  private async postGeminiQuotaRequest(
+    endpoint: string,
+    accessToken: string,
+    requestBody: Record<string, string>,
+  ): Promise<unknown> {
+    let response: Response;
+    try {
+      response = await resilientFetch(
+        endpoint,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+            "User-Agent": "omni-connector/1.0",
+          },
+          body: JSON.stringify(requestBody),
+        },
+        {
+          timeoutMs: 15_000,
+          maxAttempts: 2,
+          baseDelayMs: 120,
+          maxDelayMs: 360,
+        },
+      );
+    } catch (error) {
+      throw new HttpError(502, "provider_usage_fetch_failed", errorMessage(error, "Usage fetch failed."));
+    }
+
+    const rawBody = await response.text();
+    let payload: unknown = null;
+    if (rawBody.trim().length > 0) {
+      try {
+        payload = JSON.parse(rawBody) as unknown;
+      } catch {
+        payload = null;
+      }
+    }
+
+    if (!response.ok) {
+      const detail = extractUpstreamError(payload);
+      throw new HttpError(
+        502,
+        "provider_usage_fetch_failed",
+        detail
+          ? `Usage endpoint returned status ${response.status}. ${detail}`
+          : `Usage endpoint returned status ${response.status}.`,
+      );
+    }
+
+    if (payload === null) {
+      throw new HttpError(502, "provider_usage_parse_failed", "Usage endpoint returned invalid JSON.");
+    }
+
+    return payload;
+  }
+
+  private async fetchGeminiOauthQuotaSnapshot(account: ConnectedAccount): Promise<ProviderLiveQuotaSnapshot | null> {
+    const accessToken = account.accessToken.trim();
+    if (!accessToken) {
+      return null;
+    }
+
+    const endpoint = this.geminiCodeAssistQuotaEndpoint();
+    const projectId = account.providerAccountId.trim();
+    const requestBodies: Record<string, string>[] = projectId.length > 0 ? [{ project: projectId }, {}] : [{}];
+    let payload: unknown = null;
+    let lastError: HttpError | null = null;
+
+    for (const requestBody of requestBodies) {
+      try {
+        payload = await this.postGeminiQuotaRequest(endpoint, accessToken, requestBody);
+        lastError = null;
+        break;
+      } catch (error) {
+        if (error instanceof HttpError) {
+          lastError = error;
+        } else {
+          lastError = new HttpError(502, "provider_usage_fetch_failed", errorMessage(error, "Usage fetch failed."));
+        }
+      }
+    }
+
+    if (payload === null) {
+      if (lastError) {
+        throw lastError;
+      }
+
+      return null;
+    }
+
+    const root = asRecord(payload);
+    if (!root) {
+      return null;
+    }
+
+    const remainingFractions: number[] = [];
+    const resetTimesMs: number[] = [];
+
+    for (const bucketEntry of asArray(root.buckets)) {
+      const bucket = asRecord(bucketEntry);
+      if (!bucket) {
+        continue;
+      }
+
+      const remainingFraction = asNumber(bucket.remainingFraction ?? bucket.remaining_fraction);
+      if (remainingFraction !== null) {
+        remainingFractions.push(Math.max(0, Math.min(remainingFraction, 1)));
+      }
+
+      const resetTime = asString(bucket.resetTime ?? bucket.reset_time);
+      if (resetTime) {
+        const resetMs = Date.parse(resetTime);
+        if (!Number.isNaN(resetMs)) {
+          resetTimesMs.push(resetMs);
+        }
+      }
+    }
+
+    if (remainingFractions.length === 0) {
+      return null;
+    }
+
+    const remainingFraction = Math.min(...remainingFractions);
+    const usedPercent = Number(((1 - remainingFraction) * 100).toFixed(2));
+    const syncedAt = new Date().toISOString();
+    const earliestResetMs = resetTimesMs.length > 0 ? Math.min(...resetTimesMs) : Number.NaN;
+    const resetsAt = Number.isNaN(earliestResetMs) ? null : new Date(earliestResetMs).toISOString();
+
+    const window: LiveQuotaWindowSnapshot = {
+      limit: 100,
+      used: usedPercent,
+      mode: "percent",
+      windowStartedAt: syncedAt,
+      resetsAt,
+    };
+
+    return {
+      fiveHour: {
+        ...window,
+      },
+      weekly: {
+        ...window,
+      },
+      planType: null,
+      creditsBalance: null,
+      syncedAt,
+      partial: false,
+      syncError: null,
+    };
+  }
+
   private hasConfiguredWindowLimits(providerConfig: ProviderUsageConfig): boolean {
     return normalizeLimit(providerConfig.fiveHourLimit) > 0 && normalizeLimit(providerConfig.weeklyLimit) > 0;
   }
@@ -418,6 +608,10 @@ export class ProviderUsageService {
   }
 
   public isAccountConfigured(account: ConnectedAccount): boolean {
+    if (this.isGeminiOauthAccount(account)) {
+      return true;
+    }
+
     const providerConfig = this.config.providerUsage[account.provider];
     if (!providerConfig) {
       return false;
@@ -463,6 +657,10 @@ export class ProviderUsageService {
   public async fetchLiveQuotaSnapshot(
     account: ConnectedAccount,
   ): Promise<ProviderLiveQuotaSnapshot | null> {
+    if (this.isGeminiOauthAccount(account)) {
+      return await this.fetchGeminiOauthQuotaSnapshot(account);
+    }
+
     const providerConfig = this.config.providerUsage[account.provider];
     if (!this.isAccountConfigured(account)) {
       return null;
