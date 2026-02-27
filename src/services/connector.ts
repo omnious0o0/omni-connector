@@ -230,12 +230,16 @@ function applyEstimatedUsage(account: ConnectedAccount, units: number, nowIso: s
   account.quota.fiveHour.limit = estimatedFiveHourLimit;
   account.quota.fiveHour.used = Math.min(nextFiveHourUsed, estimatedFiveHourLimit);
   account.quota.fiveHour.mode = "units";
+  account.quota.fiveHour.label = null;
+  account.quota.fiveHour.windowMinutes = null;
   account.quota.fiveHour.windowStartedAt = account.quota.fiveHour.windowStartedAt || nowIso;
   account.quota.fiveHour.resetsAt = null;
 
   account.quota.weekly.limit = estimatedWeeklyLimit;
   account.quota.weekly.used = Math.min(nextWeeklyUsed, estimatedWeeklyLimit);
   account.quota.weekly.mode = "units";
+  account.quota.weekly.label = null;
+  account.quota.weekly.windowMinutes = null;
   account.quota.weekly.windowStartedAt = account.quota.weekly.windowStartedAt || nowIso;
   account.quota.weekly.resetsAt = null;
 
@@ -605,12 +609,16 @@ export class ConnectorService {
             account.quota.fiveHour.limit = 0;
             account.quota.fiveHour.used = 0;
             account.quota.fiveHour.mode = "units";
+            account.quota.fiveHour.label = null;
+            account.quota.fiveHour.windowMinutes = null;
             account.quota.fiveHour.windowStartedAt = nowIso;
             account.quota.fiveHour.resetsAt = null;
 
             account.quota.weekly.limit = 0;
             account.quota.weekly.used = 0;
             account.quota.weekly.mode = "units";
+            account.quota.weekly.label = null;
+            account.quota.weekly.windowMinutes = null;
             account.quota.weekly.windowStartedAt = nowIso;
             account.quota.weekly.resetsAt = null;
 
@@ -653,12 +661,16 @@ export class ConnectorService {
               account.quota.fiveHour.limit = 0;
               account.quota.fiveHour.used = 0;
               account.quota.fiveHour.mode = "units";
+              account.quota.fiveHour.label = null;
+              account.quota.fiveHour.windowMinutes = null;
               account.quota.fiveHour.windowStartedAt = nowIso;
               account.quota.fiveHour.resetsAt = null;
 
               account.quota.weekly.limit = 0;
               account.quota.weekly.used = 0;
               account.quota.weekly.mode = "units";
+              account.quota.weekly.label = null;
+              account.quota.weekly.windowMinutes = null;
               account.quota.weekly.windowStartedAt = nowIso;
               account.quota.weekly.resetsAt = null;
 
@@ -691,12 +703,16 @@ export class ConnectorService {
           account.quota.fiveHour.limit = liveQuota.fiveHour.limit;
           account.quota.fiveHour.used = liveQuota.fiveHour.used;
           account.quota.fiveHour.mode = liveQuota.fiveHour.mode;
+          account.quota.fiveHour.label = liveQuota.fiveHour.label;
+          account.quota.fiveHour.windowMinutes = liveQuota.fiveHour.windowMinutes;
           account.quota.fiveHour.windowStartedAt = liveQuota.fiveHour.windowStartedAt;
           account.quota.fiveHour.resetsAt = liveQuota.fiveHour.resetsAt;
 
           account.quota.weekly.limit = liveQuota.weekly.limit;
           account.quota.weekly.used = liveQuota.weekly.used;
           account.quota.weekly.mode = liveQuota.weekly.mode;
+          account.quota.weekly.label = liveQuota.weekly.label;
+          account.quota.weekly.windowMinutes = liveQuota.weekly.windowMinutes;
           account.quota.weekly.windowStartedAt = liveQuota.weekly.windowStartedAt;
           account.quota.weekly.resetsAt = liveQuota.weekly.resetsAt;
 
@@ -723,12 +739,16 @@ export class ConnectorService {
             account.quota.fiveHour.limit = 0;
             account.quota.fiveHour.used = 0;
             account.quota.fiveHour.mode = "units";
+            account.quota.fiveHour.label = null;
+            account.quota.fiveHour.windowMinutes = null;
             account.quota.fiveHour.windowStartedAt = nowIso;
             account.quota.fiveHour.resetsAt = null;
 
             account.quota.weekly.limit = 0;
             account.quota.weekly.used = 0;
             account.quota.weekly.mode = "units";
+            account.quota.weekly.label = null;
+            account.quota.weekly.windowMinutes = null;
             account.quota.weekly.windowStartedAt = nowIso;
             account.quota.weekly.resetsAt = null;
 

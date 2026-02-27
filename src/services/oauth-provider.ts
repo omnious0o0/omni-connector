@@ -6,6 +6,7 @@ import { OAuthLinkedAccountPayload, ProviderId, QuotaWindowMode } from "../types
 import {
   buildClaudeAuthorizationCodeTokenPayload,
   buildCodexOAuthProfile,
+  CODEX_DEFAULT_CLIENT_ID,
   CODEX_OAUTH_PROFILE_ID,
   codexUsageCandidateUrls,
   extractCodexRateLimitPayload,
@@ -63,6 +64,8 @@ interface LiveQuotaWindow {
   limit: number;
   used: number;
   mode: QuotaWindowMode;
+  label: string | null;
+  windowMinutes: number | null;
   windowStartedAt: string;
   resetsAt: string | null;
 }
@@ -389,6 +392,8 @@ function toLiveQuotaWindow(window: RateLimitWindowCandidate): LiveQuotaWindow {
     limit: 100,
     used: Number(window.usedPercent.toFixed(2)),
     mode: "percent",
+    label: null,
+    windowMinutes: window.windowMinutes,
     windowStartedAt: windowStartedAtIso(window.windowMinutes, window.resetsAtEpochSeconds),
     resetsAt: toIsoFromEpochSeconds(window.resetsAtEpochSeconds),
   };
@@ -496,6 +501,10 @@ export class OAuthProviderService {
   public redirectUriFor(providerId: ProviderId, _profileId: string): string {
     if (providerId === "gemini") {
       return this.geminiRedirectUri();
+    }
+
+    if (providerId === "codex" && this.config.oauthClientId.trim() === CODEX_DEFAULT_CLIENT_ID) {
+      return "http://localhost:1455/auth/callback";
     }
 
     return this.redirectUri();
@@ -697,11 +706,15 @@ export class OAuthProviderService {
         fiveHourLimit,
         fiveHourUsed: 0,
         fiveHourMode: "units",
+        fiveHourLabel: null,
+        fiveHourWindowMinutes: null,
         fiveHourWindowStartedAt: nowIso,
         fiveHourResetsAt: null,
         weeklyLimit,
         weeklyUsed: 0,
         weeklyMode: "units",
+        weeklyLabel: null,
+        weeklyWindowMinutes: null,
         weeklyWindowStartedAt: nowIso,
         weeklyResetsAt: null,
       },
@@ -742,12 +755,16 @@ export class OAuthProviderService {
     let fiveHourWindowStartedAt = new Date().toISOString();
     let fiveHourResetsAt: string | null = null;
     let fiveHourMode: QuotaWindowMode = "units";
+    let fiveHourLabel: string | null = null;
+    let fiveHourWindowMinutes: number | null = null;
 
     let weeklyLimit = 0;
     let weeklyUsed = 0;
     let weeklyWindowStartedAt = new Date().toISOString();
     let weeklyResetsAt: string | null = null;
     let weeklyMode: QuotaWindowMode = "units";
+    let weeklyLabel: string | null = null;
+    let weeklyWindowMinutes: number | null = null;
 
     try {
       const liveQuotaSnapshot = await this.fetchLiveQuotaSnapshot(
@@ -764,12 +781,16 @@ export class OAuthProviderService {
         fiveHourLimit = liveQuotaSnapshot.fiveHour.limit;
         fiveHourUsed = liveQuotaSnapshot.fiveHour.used;
         fiveHourMode = liveQuotaSnapshot.fiveHour.mode;
+        fiveHourLabel = liveQuotaSnapshot.fiveHour.label;
+        fiveHourWindowMinutes = liveQuotaSnapshot.fiveHour.windowMinutes;
         fiveHourWindowStartedAt = liveQuotaSnapshot.fiveHour.windowStartedAt;
         fiveHourResetsAt = liveQuotaSnapshot.fiveHour.resetsAt;
 
         weeklyLimit = liveQuotaSnapshot.weekly.limit;
         weeklyUsed = liveQuotaSnapshot.weekly.used;
         weeklyMode = liveQuotaSnapshot.weekly.mode;
+        weeklyLabel = liveQuotaSnapshot.weekly.label;
+        weeklyWindowMinutes = liveQuotaSnapshot.weekly.windowMinutes;
         weeklyWindowStartedAt = liveQuotaSnapshot.weekly.windowStartedAt;
         weeklyResetsAt = liveQuotaSnapshot.weekly.resetsAt;
       }
@@ -820,11 +841,15 @@ export class OAuthProviderService {
         fiveHourLimit,
         fiveHourUsed,
         fiveHourMode,
+        fiveHourLabel,
+        fiveHourWindowMinutes,
         fiveHourWindowStartedAt,
         fiveHourResetsAt,
         weeklyLimit,
         weeklyUsed,
         weeklyMode,
+        weeklyLabel,
+        weeklyWindowMinutes,
         weeklyWindowStartedAt,
         weeklyResetsAt,
       },

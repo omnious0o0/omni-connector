@@ -7,6 +7,7 @@ import {
   ConnectedAccount,
   OAuthLinkedAccountPayload,
   PersistedData,
+  RoutingPreferences,
 } from "../types";
 
 function normalizeComparableIdentity(value: string | null | undefined): string {
@@ -65,6 +66,25 @@ export class AccountRepository {
     return this.store.update(mutator);
   }
 
+  public routingPreferences(): RoutingPreferences {
+    return this.store.read().connector.routingPreferences;
+  }
+
+  public updateRoutingPreferences(preferences: RoutingPreferences): RoutingPreferences {
+    let nextPreferences = preferences;
+
+    this.store.update((draft) => {
+      draft.connector.routingPreferences = {
+        preferredProvider: preferences.preferredProvider,
+        fallbackProviders: [...preferences.fallbackProviders],
+        priorityModels: [...preferences.priorityModels],
+      };
+      nextPreferences = draft.connector.routingPreferences;
+    });
+
+    return nextPreferences;
+  }
+
   public normalizeQuotas(normalize: (account: ConnectedAccount) => void): PersistedData {
     return this.store.update((draft) => {
       for (const account of draft.accounts) {
@@ -110,6 +130,12 @@ export class AccountRepository {
         existingAccount.quota.weekly.used = normalizedWeeklyUsed;
         existingAccount.quota.fiveHour.mode = payload.quota.fiveHourMode ?? "units";
         existingAccount.quota.weekly.mode = payload.quota.weeklyMode ?? "units";
+        existingAccount.quota.fiveHour.label = payload.quota.fiveHourLabel ?? existingAccount.quota.fiveHour.label ?? null;
+        existingAccount.quota.weekly.label = payload.quota.weeklyLabel ?? existingAccount.quota.weekly.label ?? null;
+        existingAccount.quota.fiveHour.windowMinutes =
+          payload.quota.fiveHourWindowMinutes ?? existingAccount.quota.fiveHour.windowMinutes ?? null;
+        existingAccount.quota.weekly.windowMinutes =
+          payload.quota.weeklyWindowMinutes ?? existingAccount.quota.weekly.windowMinutes ?? null;
         existingAccount.quota.fiveHour.windowStartedAt =
           payload.quota.fiveHourWindowStartedAt ?? existingAccount.quota.fiveHour.windowStartedAt;
         existingAccount.quota.weekly.windowStartedAt =
@@ -151,6 +177,8 @@ export class AccountRepository {
             limit: payload.quota.fiveHourLimit,
             used: normalizedFiveHourUsed,
             mode: payload.quota.fiveHourMode ?? "units",
+            label: payload.quota.fiveHourLabel ?? null,
+            windowMinutes: payload.quota.fiveHourWindowMinutes ?? null,
             windowStartedAt: payload.quota.fiveHourWindowStartedAt ?? nowIso,
             resetsAt: payload.quota.fiveHourResetsAt ?? null,
           },
@@ -158,6 +186,8 @@ export class AccountRepository {
             limit: payload.quota.weeklyLimit,
             used: normalizedWeeklyUsed,
             mode: payload.quota.weeklyMode ?? "units",
+            label: payload.quota.weeklyLabel ?? null,
+            windowMinutes: payload.quota.weeklyWindowMinutes ?? null,
             windowStartedAt: payload.quota.weeklyWindowStartedAt ?? nowIso,
             resetsAt: payload.quota.weeklyResetsAt ?? null,
           },
@@ -234,6 +264,10 @@ export class AccountRepository {
         );
         existingAccount.quota.fiveHour.mode = "units";
         existingAccount.quota.weekly.mode = "units";
+        existingAccount.quota.fiveHour.label = null;
+        existingAccount.quota.weekly.label = null;
+        existingAccount.quota.fiveHour.windowMinutes = null;
+        existingAccount.quota.weekly.windowMinutes = null;
         existingAccount.quota.fiveHour.windowStartedAt = nowIso;
         existingAccount.quota.weekly.windowStartedAt = nowIso;
         existingAccount.quota.fiveHour.resetsAt = null;
@@ -264,6 +298,8 @@ export class AccountRepository {
             limit: effectiveFiveHourLimit,
             used: 0,
             mode: "units",
+            label: null,
+            windowMinutes: null,
             windowStartedAt: nowIso,
             resetsAt: null,
           },
@@ -271,6 +307,8 @@ export class AccountRepository {
             limit: effectiveWeeklyLimit,
             used: 0,
             mode: "units",
+            label: null,
+            windowMinutes: null,
             windowStartedAt: nowIso,
             resetsAt: null,
           },
@@ -344,6 +382,10 @@ export class AccountRepository {
         account.quota.weekly.used = Math.min(account.quota.weekly.used, account.quota.weekly.limit);
         account.quota.fiveHour.mode = "units";
         account.quota.weekly.mode = "units";
+        account.quota.fiveHour.label = null;
+        account.quota.weekly.label = null;
+        account.quota.fiveHour.windowMinutes = null;
+        account.quota.weekly.windowMinutes = null;
       }
 
       account.updatedAt = new Date().toISOString();

@@ -10,6 +10,8 @@ interface LiveQuotaWindowSnapshot {
   limit: number;
   used: number;
   mode: QuotaWindowMode;
+  label: string | null;
+  windowMinutes: number | null;
   windowStartedAt: string;
   resetsAt: string | null;
 }
@@ -64,6 +66,23 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function quotaTokenTypeLabel(tokenType: string | null): string | null {
+  if (!tokenType) {
+    return null;
+  }
+
+  const normalized = tokenType.trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (char) => char.toUpperCase());
 }
 
 function clampUsed(used: number, limit: number): number {
@@ -150,6 +169,11 @@ function fallbackWindowFromAccount(
   const limit = normalizeLimit(source.limit > 0 ? source.limit : fallbackLimit);
   const used = clampUsed(source.used, limit);
   const mode = source.mode ?? "units";
+  const label = source.label ?? null;
+  const windowMinutes =
+    typeof source.windowMinutes === "number" && Number.isFinite(source.windowMinutes)
+      ? Math.max(0, Math.round(source.windowMinutes))
+      : null;
   const windowStartedAt = source.windowStartedAt || new Date().toISOString();
   const resetsAt = source.resetsAt ?? null;
 
@@ -157,16 +181,20 @@ function fallbackWindowFromAccount(
     limit,
     used,
     mode,
+    label,
+    windowMinutes,
     windowStartedAt,
     resetsAt,
   };
 }
 
-function unitWindow(limit: number, used: number, syncedAt: string): LiveQuotaWindowSnapshot {
+function unitWindow(limit: number, used: number, syncedAt: string, windowMinutes: number | null): LiveQuotaWindowSnapshot {
   return {
     limit,
     used,
     mode: "units",
+    label: null,
+    windowMinutes,
     windowStartedAt: syncedAt,
     resetsAt: null,
   };
@@ -530,8 +558,11 @@ export class ProviderUsageService {
       return null;
     }
 
-    const remainingFractions: number[] = [];
-    const resetTimesMs: number[] = [];
+    const bucketWindows: Array<{
+      remainingFraction: number;
+      resetMs: number | null;
+      tokenType: string | null;
+    }> = [];
 
     for (const bucketEntry of asArray(root.buckets)) {
       const bucket = asRecord(bucketEntry);
@@ -540,43 +571,102 @@ export class ProviderUsageService {
       }
 
       const remainingFraction = asNumber(bucket.remainingFraction ?? bucket.remaining_fraction);
-      if (remainingFraction !== null) {
-        remainingFractions.push(Math.max(0, Math.min(remainingFraction, 1)));
+      if (remainingFraction === null) {
+        continue;
       }
+
+      const normalizedRemaining = Math.max(0, Math.min(remainingFraction, 1));
 
       const resetTime = asString(bucket.resetTime ?? bucket.reset_time);
-      if (resetTime) {
-        const resetMs = Date.parse(resetTime);
-        if (!Number.isNaN(resetMs)) {
-          resetTimesMs.push(resetMs);
-        }
-      }
+      const resetMsRaw = resetTime ? Date.parse(resetTime) : Number.NaN;
+      const resetMs = Number.isNaN(resetMsRaw) ? null : resetMsRaw;
+      const tokenType = asString(bucket.tokenType ?? bucket.token_type);
+
+      bucketWindows.push({
+        remainingFraction: normalizedRemaining,
+        resetMs,
+        tokenType,
+      });
     }
 
-    if (remainingFractions.length === 0) {
+    if (bucketWindows.length === 0) {
       return null;
     }
 
-    const remainingFraction = Math.min(...remainingFractions);
-    const usedPercent = Number(((1 - remainingFraction) * 100).toFixed(2));
     const syncedAt = new Date().toISOString();
-    const earliestResetMs = resetTimesMs.length > 0 ? Math.min(...resetTimesMs) : Number.NaN;
-    const resetsAt = Number.isNaN(earliestResetMs) ? null : new Date(earliestResetMs).toISOString();
+    const groupedWindows = new Map<
+      string,
+      {
+        remainingFractions: number[];
+        resetMs: number | null;
+        tokenType: string | null;
+      }
+    >();
 
-    const window: LiveQuotaWindowSnapshot = {
-      limit: 100,
-      used: usedPercent,
-      mode: "percent",
-      windowStartedAt: syncedAt,
-      resetsAt,
-    };
+    for (const bucketWindow of bucketWindows) {
+      const key = `${bucketWindow.tokenType ?? "unknown"}|${bucketWindow.resetMs ?? "na"}`;
+      const existing = groupedWindows.get(key);
+      if (existing) {
+        existing.remainingFractions.push(bucketWindow.remainingFraction);
+        continue;
+      }
+
+      groupedWindows.set(key, {
+        remainingFractions: [bucketWindow.remainingFraction],
+        resetMs: bucketWindow.resetMs,
+        tokenType: bucketWindow.tokenType,
+      });
+    }
+
+    const normalizedWindows = [...groupedWindows.values()]
+      .map((windowGroup) => {
+        const remainingFraction = Math.min(...windowGroup.remainingFractions);
+        const usedPercent = Number(((1 - remainingFraction) * 100).toFixed(2));
+        return {
+          limit: 100,
+          used: usedPercent,
+          mode: "percent" as const,
+          label: quotaTokenTypeLabel(windowGroup.tokenType),
+          windowMinutes: null,
+          windowStartedAt: syncedAt,
+          resetsAt: windowGroup.resetMs === null ? null : new Date(windowGroup.resetMs).toISOString(),
+          resetMs: windowGroup.resetMs,
+        };
+      })
+      .sort((left, right) => {
+        const leftReset = left.resetMs ?? Number.MAX_SAFE_INTEGER;
+        const rightReset = right.resetMs ?? Number.MAX_SAFE_INTEGER;
+        if (leftReset !== rightReset) {
+          return leftReset - rightReset;
+        }
+
+        return left.used - right.used;
+      });
+
+    const firstWindow = normalizedWindows[0] ?? null;
+    if (!firstWindow) {
+      return null;
+    }
+    const secondWindow = normalizedWindows[1] ?? firstWindow;
 
     return {
       fiveHour: {
-        ...window,
+        limit: firstWindow.limit,
+        used: firstWindow.used,
+        mode: firstWindow.mode,
+        label: firstWindow.label,
+        windowMinutes: firstWindow.windowMinutes,
+        windowStartedAt: firstWindow.windowStartedAt,
+        resetsAt: firstWindow.resetsAt,
       },
       weekly: {
-        ...window,
+        limit: secondWindow.limit,
+        used: secondWindow.used,
+        mode: secondWindow.mode,
+        label: secondWindow.label,
+        windowMinutes: secondWindow.windowMinutes,
+        windowStartedAt: secondWindow.windowStartedAt,
+        resetsAt: secondWindow.resetsAt,
       },
       planType: null,
       creditsBalance: null,
@@ -719,7 +809,12 @@ export class ProviderUsageService {
 
     const fiveHourWindow =
       fiveHourResult.status === "fulfilled"
-        ? unitWindow(fiveHourLimit, clampUsed(parseOpenAiBucketUsage(fiveHourResult.value), fiveHourLimit), syncedAt)
+        ? unitWindow(
+            fiveHourLimit,
+            clampUsed(parseOpenAiBucketUsage(fiveHourResult.value), fiveHourLimit),
+            syncedAt,
+            5 * 60,
+          )
         : (() => {
             errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "request failed")}).`);
             return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
@@ -727,7 +822,12 @@ export class ProviderUsageService {
 
     const weeklyWindow =
       weeklyResult.status === "fulfilled"
-        ? unitWindow(weeklyLimit, clampUsed(parseOpenAiBucketUsage(weeklyResult.value), weeklyLimit), syncedAt)
+        ? unitWindow(
+            weeklyLimit,
+            clampUsed(parseOpenAiBucketUsage(weeklyResult.value), weeklyLimit),
+            syncedAt,
+            7 * 24 * 60,
+          )
         : (() => {
             errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "request failed")}).`);
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
@@ -824,7 +924,12 @@ export class ProviderUsageService {
 
     const fiveHourWindow =
       fiveHourResult.status === "fulfilled"
-        ? unitWindow(fiveHourLimit, clampUsed(parseAnthropicUsage(fiveHourResult.value), fiveHourLimit), syncedAt)
+        ? unitWindow(
+            fiveHourLimit,
+            clampUsed(parseAnthropicUsage(fiveHourResult.value), fiveHourLimit),
+            syncedAt,
+            5 * 60,
+          )
         : (() => {
             errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "request failed")}).`);
             return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
@@ -832,7 +937,12 @@ export class ProviderUsageService {
 
     const weeklyWindow =
       weeklyResult.status === "fulfilled"
-        ? unitWindow(weeklyLimit, clampUsed(parseAnthropicUsage(weeklyResult.value), weeklyLimit), syncedAt)
+        ? unitWindow(
+            weeklyLimit,
+            clampUsed(parseAnthropicUsage(weeklyResult.value), weeklyLimit),
+            syncedAt,
+            7 * 24 * 60,
+          )
         : (() => {
             errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "request failed")}).`);
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
@@ -902,6 +1012,8 @@ export class ProviderUsageService {
             limit: fiveHourParsed.limit,
             used: clampUsed(fiveHourParsed.used, fiveHourParsed.limit),
             mode: fiveHourParsed.mode,
+            label: null,
+            windowMinutes: null,
             windowStartedAt: syncedAt,
             resetsAt: null,
           }
@@ -920,6 +1032,8 @@ export class ProviderUsageService {
             limit: weeklyParsed.limit,
             used: clampUsed(weeklyParsed.used, weeklyParsed.limit),
             mode: weeklyParsed.mode,
+            label: null,
+            windowMinutes: null,
             windowStartedAt: syncedAt,
             resetsAt: null,
           }

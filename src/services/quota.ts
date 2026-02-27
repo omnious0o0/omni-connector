@@ -39,21 +39,9 @@ function normalizeWindow(window: QuotaWindowState, durationMs: number, nowMs: nu
   }
 }
 
-function lockFiveHourWindowWhenWeeklyExhausted(account: ConnectedAccount, nowMs: number): void {
-  const weeklyRemaining = remainingQuota(account.quota.weekly);
-  if (weeklyRemaining > 0) {
-    return;
-  }
-
-  account.quota.fiveHour.used = account.quota.fiveHour.limit;
-  account.quota.fiveHour.windowStartedAt = new Date(nowMs).toISOString();
-  account.quota.fiveHour.resetsAt = null;
-}
-
 export function normalizeAccountQuota(account: ConnectedAccount, nowMs: number = Date.now()): void {
   normalizeWindow(account.quota.fiveHour, FIVE_HOUR_WINDOW_MS, nowMs);
   normalizeWindow(account.quota.weekly, WEEK_WINDOW_MS, nowMs);
-  lockFiveHourWindowWhenWeeklyExhausted(account, nowMs);
 }
 
 export function remainingQuota(window: QuotaWindowState): number {
@@ -66,12 +54,6 @@ function remainingRatio(window: QuotaWindowState): number {
   }
 
   return remainingQuota(window) / window.limit;
-}
-
-function effectiveFiveHourRemaining(account: ConnectedAccount): number {
-  const fiveHourRemaining = remainingQuota(account.quota.fiveHour);
-  const weeklyRemaining = remainingQuota(account.quota.weekly);
-  return Math.min(fiveHourRemaining, weeklyRemaining);
 }
 
 export function calculateRoutingScore(account: ConnectedAccount): number {
@@ -113,7 +95,7 @@ export function compareByAvailability(a: ConnectedAccount, b: ConnectedAccount):
 }
 
 export function toDashboardAccount(account: ConnectedAccount): DashboardAccount {
-  const fiveHourRemaining = effectiveFiveHourRemaining(account);
+  const fiveHourRemaining = remainingQuota(account.quota.fiveHour);
   const weeklyRemaining = remainingQuota(account.quota.weekly);
 
   return {
@@ -139,6 +121,8 @@ export function toDashboardAccount(account: ConnectedAccount): DashboardAccount 
         limit: account.quota.fiveHour.limit,
         used: account.quota.fiveHour.used,
         mode: account.quota.fiveHour.mode ?? "units",
+        label: account.quota.fiveHour.label ?? null,
+        windowMinutes: account.quota.fiveHour.windowMinutes ?? null,
         remaining: fiveHourRemaining,
         resetsAt: account.quota.fiveHour.resetsAt ?? null,
         remainingRatio:
@@ -150,6 +134,8 @@ export function toDashboardAccount(account: ConnectedAccount): DashboardAccount 
         limit: account.quota.weekly.limit,
         used: account.quota.weekly.used,
         mode: account.quota.weekly.mode ?? "units",
+        label: account.quota.weekly.label ?? null,
+        windowMinutes: account.quota.weekly.windowMinutes ?? null,
         remaining: weeklyRemaining,
         resetsAt: account.quota.weekly.resetsAt ?? null,
         remainingRatio:

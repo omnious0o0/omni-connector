@@ -25,6 +25,8 @@ export interface QuotaWindowState {
   limit: number;
   used: number;
   mode?: QuotaWindowMode;
+  label?: string | null;
+  windowMinutes?: number | null;
   windowStartedAt: string;
   resetsAt?: string | null;
 }
@@ -89,11 +91,15 @@ export interface OAuthLinkedAccountPayload {
     fiveHourLimit: number;
     fiveHourUsed?: number;
     fiveHourMode?: QuotaWindowMode;
+    fiveHourLabel?: string | null;
+    fiveHourWindowMinutes?: number | null;
     fiveHourWindowStartedAt?: string;
     fiveHourResetsAt?: string | null;
     weeklyLimit: number;
     weeklyUsed?: number;
     weeklyMode?: QuotaWindowMode;
+    weeklyLabel?: string | null;
+    weeklyWindowMinutes?: number | null;
     weeklyWindowStartedAt?: string;
     weeklyResetsAt?: string | null;
   };
@@ -118,6 +124,8 @@ export interface DashboardQuotaWindow {
   limit: number;
   used: number;
   mode?: QuotaWindowMode;
+  label?: string | null;
+  windowMinutes?: number | null;
   remaining: number;
   remainingRatio: number;
   resetsAt?: string | null;
