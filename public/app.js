@@ -1790,9 +1790,10 @@ function renderDashboard(data) {
 
 async function loadDashboard() {
   try {
+    const modelsPromise = loadConnectedProviderModels();
     const payload = await request("/api/dashboard");
     renderDashboard(payload);
-    await loadConnectedProviderModels();
+    await modelsPromise;
   } catch (error) {
     statusError = true;
     refreshTopbarStatus();

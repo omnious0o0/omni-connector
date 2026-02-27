@@ -423,10 +423,18 @@ async function linkOAuthAccount(
     .expect("location", "/?connected=1");
 }
 
-async function startMockModelsServer(): Promise<{
+interface MockModelsServerOptions {
+  expectedApiKey?: string;
+  responseDelayMs?: number;
+}
+
+async function startMockModelsServer(options: MockModelsServerOptions = {}): Promise<{
   baseUrl: string;
   close: () => Promise<void>;
 }> {
+  const expectedApiKey = options.expectedApiKey ?? "codex-models-key";
+  const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
+
   const server = http.createServer(async (request, response) => {
     const method = request.method ?? "GET";
     const host = request.headers.host ?? "127.0.0.1";
@@ -434,10 +442,16 @@ async function startMockModelsServer(): Promise<{
 
     if (method === "GET" && url.pathname === "/v1/models") {
       const authorization = request.headers.authorization;
-      if (authorization !== "Bearer codex-models-key") {
+      if (authorization !== `Bearer ${expectedApiKey}`) {
         response.writeHead(401, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "unauthorized" }));
         return;
+      }
+
+      if (responseDelayMs > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, responseDelayMs);
+        });
       }
 
       response.writeHead(200, { "content-type": "application/json" });
@@ -3043,6 +3057,142 @@ test("returns dashboard quickly while slow quota sync continues in background", 
     assert.equal(dashboardSynced.body.accounts[0]?.quota?.fiveHour?.used, 18);
     assert.equal(dashboardSynced.body.accounts[0]?.quota?.weekly?.used, 125);
   } finally {
+    await mockUsage.close();
+    temp.cleanup();
+  }
+});
+
+test("returns connected models quickly while slow quota sync continues in background", async () => {
+  const temp = createTempDataPath();
+  const mockUsage = await startMockUsageServer({ responseDelayMs: 2000 });
+  const mockModelsServer = await startMockModelsServer({ expectedApiKey: "gem-live-key" });
+
+  const now = new Date().toISOString();
+  const staleTime = "2000-01-01T00:00:00.000Z";
+  const seededStore = {
+    connector: {
+      apiKey: "cxk_seeded_slow_models",
+      createdAt: now,
+      lastRotatedAt: now,
+    },
+    accounts: [
+      {
+        id: "acc_slow_models",
+        provider: "codex",
+        authMethod: "api",
+        providerAccountId: "codex-slow-models",
+        chatgptAccountId: null,
+        displayName: "Codex Slow Models",
+        accessToken: "gem-live-key",
+        refreshToken: null,
+        tokenExpiresAt: "2999-01-01T00:00:00.000Z",
+        createdAt: now,
+        updatedAt: now,
+        quotaSyncedAt: staleTime,
+        quotaSyncStatus: "stale",
+        quotaSyncError: null,
+        planType: null,
+        creditsBalance: null,
+        quota: {
+          fiveHour: {
+            limit: 1000,
+            used: 0,
+            mode: "units",
+            windowStartedAt: staleTime,
+            resetsAt: null,
+          },
+          weekly: {
+            limit: 8000,
+            used: 0,
+            mode: "units",
+            windowStartedAt: staleTime,
+            resetsAt: null,
+          },
+        },
+      },
+    ],
+  };
+
+  fs.writeFileSync(temp.dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: false,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerInferenceBaseUrls: {
+        ...defaults.providerInferenceBaseUrls,
+        codex: `${mockModelsServer.baseUrl}/v1`,
+      },
+      providerUsage: {
+        ...defaults.providerUsage,
+        codex: {
+          ...defaults.providerUsage.codex,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: `${mockUsage.baseUrl}/usage/5h`,
+          weeklyUrl: `${mockUsage.baseUrl}/usage/7d`,
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    const startedAt = Date.now();
+    const modelsFast = await agent
+      .get("/api/models/connected")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.ok(elapsedMs < 1500, `connected models request took ${elapsedMs}ms`);
+
+    const providers = modelsFast.body.providers as Array<{
+      provider: string;
+      accountCount: number;
+      status: string;
+      modelIds: string[];
+      syncError: string | null;
+    }>;
+
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0]?.provider, "codex");
+    assert.equal(providers[0]?.status, "live");
+    assert.deepEqual(providers[0]?.modelIds, ["alpha-exact-002", "zeta-exact-001"]);
+    assert.equal(providers[0]?.syncError, null);
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 2300);
+    });
+
+    const dashboardSynced = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    assert.equal(dashboardSynced.body.accounts[0]?.quotaSyncStatus, "live");
+    assert.equal(dashboardSynced.body.accounts[0]?.quota?.fiveHour?.used, 18);
+    assert.equal(dashboardSynced.body.accounts[0]?.quota?.weekly?.used, 125);
+  } finally {
+    await mockModelsServer.close();
     await mockUsage.close();
     temp.cleanup();
   }

@@ -340,7 +340,7 @@ export class ConnectorService {
   }
 
   public async connectedProviderModels(): Promise<ConnectedProviderModelsPayload> {
-    await this.syncAccountState();
+    await this.syncAccountStateWithBudget(DASHBOARD_SYNC_WAIT_BUDGET_MS);
     const snapshot = this.accounts.read();
     return await this.providerModelsService.fetchConnectedProviderModels(snapshot.accounts);
   }
