@@ -98,6 +98,7 @@ let providerConfigured = null;
 let dashboardLoaded = false;
 let statusError = false;
 let connectProviders = [];
+let connectProvidersLoading = true;
 let selectedApiProviderId = null;
 let apiLinkManualLimitsEnabled = false;
 let connectModalPreviousFocus = null;
@@ -779,8 +780,14 @@ function maskAuthorizationHeader(headerValue) {
   }
 
   const token = match[1];
-  const start = token.slice(0, 10);
-  const end = token.slice(-6);
+  const startCount = 10;
+  const endCount = 6;
+  if (token.length <= startCount + endCount) {
+    return "Bearer [redacted]";
+  }
+
+  const start = token.slice(0, startCount);
+  const end = token.slice(-endCount);
   return `Bearer ${start}...${end}`;
 }
 
@@ -883,6 +890,27 @@ function maskDisplayName(value) {
   }
 
   return maskSensitiveValue(trimmed, 2, 1);
+}
+
+function maskProviderAccountId(value) {
+  if (typeof value !== "string") {
+    return "Unavailable";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Unavailable";
+  }
+
+  if (shouldRevealAccountDetails()) {
+    return trimmed;
+  }
+
+  if (trimmed.includes("@")) {
+    return maskEmailMiddle(trimmed);
+  }
+
+  return maskSensitiveValue(trimmed, 3, 2);
 }
 
 function maskDisplayNameForRoute(value) {
@@ -2237,11 +2265,23 @@ function renderConnectProviderCards() {
     return;
   }
 
+  if (connectProvidersLoading) {
+    connectProviderListElement.innerHTML = `
+      <div class="connect-provider-empty">
+        <i data-lucide="loader-circle"></i>
+        <p>Loading providers...</p>
+      </div>
+    `;
+    reRenderIcons();
+    return;
+  }
+
   if (connectProviders.length === 0) {
     connectProviderListElement.innerHTML = `
       <div class="connect-provider-empty">
         <i data-lucide="plug-zap"></i>
         <p>Provider list unavailable.</p>
+        <p>Check provider configuration and retry.</p>
       </div>
     `;
     reRenderIcons();
@@ -2617,7 +2657,7 @@ function openAccountSettingsModal(accountId) {
   }
 
   if (accountSettingsProviderAccountElement instanceof HTMLElement) {
-    accountSettingsProviderAccountElement.textContent = account.providerAccountId;
+    accountSettingsProviderAccountElement.textContent = maskProviderAccountId(account.providerAccountId);
   }
 
   if (accountSettingsOAuthProfileWrapperElement instanceof HTMLElement) {
@@ -2708,6 +2748,7 @@ function closeAccountSettingsModal() {
 function renderConnectProviders(payload) {
   const providers = Array.isArray(payload?.providers) ? payload.providers : [];
   strictLiveQuotaEnabled = payload?.strictLiveQuota === true;
+  connectProvidersLoading = false;
 
   connectProviders = providers
     .map((provider) => {
@@ -2807,6 +2848,9 @@ async function loadConnectProviders() {
     const metadata = await request("/api/auth/providers");
     renderConnectProviders(metadata);
   } catch (error) {
+    connectProvidersLoading = false;
+    connectProviders = [];
+    renderConnectProviderCards();
     statusError = true;
     refreshTopbarStatus();
     throw error;
@@ -3398,6 +3442,11 @@ if (apiLinkForm instanceof HTMLFormElement) {
   apiLinkForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
+    if (apiLinkKeyInput instanceof HTMLInputElement) {
+      apiLinkKeyInput.setCustomValidity("");
+      apiLinkKeyInput.removeAttribute("aria-invalid");
+    }
+
     if (!selectedApiProviderId) {
       showToast("Select a provider first.", true);
       return;
@@ -3412,7 +3461,20 @@ if (apiLinkForm instanceof HTMLFormElement) {
     const data = new FormData(apiLinkForm);
     const displayName = String(data.get("displayName") ?? "");
     const providerAccountId = String(data.get("providerAccountId") ?? "");
-    const apiKey = String(data.get("apiKey") ?? "");
+    const apiKey = String(data.get("apiKey") ?? "").trim();
+
+    if (!apiKey) {
+      if (apiLinkKeyInput instanceof HTMLInputElement) {
+        apiLinkKeyInput.setCustomValidity("API key is required.");
+        apiLinkKeyInput.setAttribute("aria-invalid", "true");
+        apiLinkKeyInput.reportValidity();
+        apiLinkKeyInput.focus();
+      } else {
+        showToast("API key is required.", true);
+      }
+      return;
+    }
+
     let manualFiveHourLimit;
     let manualWeeklyLimit;
 
@@ -3456,6 +3518,11 @@ if (accountSettingsForm instanceof HTMLFormElement) {
   accountSettingsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
+    if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
+      accountSettingsDisplayNameInput.setCustomValidity("");
+      accountSettingsDisplayNameInput.removeAttribute("aria-invalid");
+    }
+
     if (!selectedAccountSettingsId) {
       showToast("No account selected.", true);
       return;
@@ -3472,7 +3539,14 @@ if (accountSettingsForm instanceof HTMLFormElement) {
         ? accountSettingsDisplayNameInput.value.trim()
         : "";
     if (!displayName) {
-      showToast("Display name is required.", true);
+      if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
+        accountSettingsDisplayNameInput.setCustomValidity("Display name is required.");
+        accountSettingsDisplayNameInput.setAttribute("aria-invalid", "true");
+        accountSettingsDisplayNameInput.reportValidity();
+        accountSettingsDisplayNameInput.focus();
+      } else {
+        showToast("Display name is required.", true);
+      }
       return;
     }
 
@@ -3511,6 +3585,20 @@ if (accountSettingsForm instanceof HTMLFormElement) {
     } catch (error) {
       showToast(error.message || "Failed to save account settings.", true);
     }
+  });
+}
+
+if (apiLinkKeyInput instanceof HTMLInputElement) {
+  apiLinkKeyInput.addEventListener("input", () => {
+    apiLinkKeyInput.setCustomValidity("");
+    apiLinkKeyInput.removeAttribute("aria-invalid");
+  });
+}
+
+if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
+  accountSettingsDisplayNameInput.addEventListener("input", () => {
+    accountSettingsDisplayNameInput.setCustomValidity("");
+    accountSettingsDisplayNameInput.removeAttribute("aria-invalid");
   });
 }
 
