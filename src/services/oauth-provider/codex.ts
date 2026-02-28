@@ -27,7 +27,7 @@ export function buildCodexOAuthProfile(config: AppConfig): OAuthProviderProfileC
 
   return {
     id: CODEX_OAUTH_PROFILE_ID,
-    label: config.oauthProviderName,
+    label: "Codex",
     authorizationUrl: config.oauthAuthorizationUrl,
     tokenUrl: config.oauthTokenUrl,
     userInfoUrl: config.oauthUserInfoUrl,

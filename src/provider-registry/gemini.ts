@@ -7,7 +7,7 @@ const googleUserInfoUrl = "https://openidconnect.googleapis.com/v1/userinfo";
 const geminiProvider: ProviderModule = {
   descriptor: {
     id: "gemini",
-    name: "Google (Gemini)",
+    name: "Google",
     methods: ["oauth", "api"],
     warnings: [
       "Gemini CLI OAuth may violate provider terms. Use at your own risk.",

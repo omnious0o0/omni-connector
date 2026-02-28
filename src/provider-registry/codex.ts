@@ -3,7 +3,7 @@ import { ProviderModule } from "./contracts";
 const codexProvider: ProviderModule = {
   descriptor: {
     id: "codex",
-    name: "OpenAI (Codex)",
+    name: "OpenAI",
     methods: ["oauth", "api"],
   },
   oauthProfiles: [
@@ -12,7 +12,7 @@ const codexProvider: ProviderModule = {
       envPrefix: "CODEX",
       id: "oauth",
       defaults: {
-        label: "OpenAI (Codex)",
+        label: "Codex",
         authorizationUrl: "https://auth.openai.com/oauth/authorize",
         tokenUrl: "https://auth.openai.com/oauth/token",
         userInfoUrl: null,
