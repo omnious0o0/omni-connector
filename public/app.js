@@ -140,6 +140,7 @@ const LEGACY_STORAGE_KEYS = Object.freeze(
 
 const AUTO_REFRESH_INTERVAL_MS = 30_000;
 const KNOWN_PROVIDER_IDS = ["codex", "gemini", "claude", "openrouter"];
+const CONNECT_WARNING_TOOLTIP_ID = "connect-provider-warning-tooltip";
 
 if (window.lucide) {
   lucide.createIcons();
@@ -149,6 +150,44 @@ function reRenderIcons() {
   if (window.lucide) {
     lucide.createIcons();
   }
+}
+
+function setDescribedByToken(element, token, enabled) {
+  const current = (element.getAttribute("aria-describedby") ?? "").trim();
+  const tokens = current.length > 0 ? current.split(/\s+/) : [];
+  const next = enabled
+    ? [...new Set([...tokens, token])]
+    : tokens.filter((entry) => entry !== token);
+
+  if (next.length > 0) {
+    element.setAttribute("aria-describedby", next.join(" "));
+    return;
+  }
+
+  element.removeAttribute("aria-describedby");
+}
+
+function applyModalIsolationTargetState(target, isolated) {
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  if ("inert" in target) {
+    target.inert = isolated;
+  }
+
+  if (isolated) {
+    target.setAttribute("aria-hidden", "true");
+    return;
+  }
+
+  target.removeAttribute("aria-hidden");
+}
+
+function updateModalIsolationState() {
+  const isolateBackground = isConnectModalOpen() || isAccountSettingsModalOpen();
+  applyModalIsolationTargetState(appLayoutElement, isolateBackground);
+  applyModalIsolationTargetState(toastElement, isolateBackground);
 }
 
 function warningItemsFromTrigger(trigger) {
@@ -179,6 +218,7 @@ function ensureConnectWarningTooltipElement() {
   }
 
   const element = document.createElement("div");
+  element.id = CONNECT_WARNING_TOOLTIP_ID;
   element.className = "connect-provider-warning-floating";
   element.hidden = true;
   element.setAttribute("role", "tooltip");
@@ -220,6 +260,10 @@ function positionConnectWarningTooltip(trigger, tooltip) {
 }
 
 function hideConnectWarningTooltip() {
+  if (activeWarningTrigger instanceof HTMLElement) {
+    setDescribedByToken(activeWarningTrigger, CONNECT_WARNING_TOOLTIP_ID, false);
+  }
+
   if (!(connectWarningTooltipElement instanceof HTMLElement)) {
     activeWarningTrigger = null;
     return;
@@ -237,6 +281,10 @@ function showConnectWarningTooltip(trigger) {
     return;
   }
 
+  if (activeWarningTrigger instanceof HTMLElement && activeWarningTrigger !== trigger) {
+    setDescribedByToken(activeWarningTrigger, CONNECT_WARNING_TOOLTIP_ID, false);
+  }
+
   const tooltip = ensureConnectWarningTooltipElement();
   tooltip.innerHTML = `
     <p class="connect-provider-warning-title">Warnings</p>
@@ -246,6 +294,7 @@ function showConnectWarningTooltip(trigger) {
   `;
   tooltip.hidden = false;
   positionConnectWarningTooltip(trigger, tooltip);
+  setDescribedByToken(trigger, CONNECT_WARNING_TOOLTIP_ID, true);
   activeWarningTrigger = trigger;
 }
 
@@ -673,6 +722,32 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function sanitizeOauthStartPath(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    if (parsed.origin !== window.location.origin) {
+      return null;
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
 }
 
 function formatNumber(value) {
@@ -1833,8 +1908,40 @@ function renderQuotaSyncIssueMarkup(syncIssue, accountId) {
   `;
 }
 
+function setAccountsListBusy(isBusy) {
+  if (!(accountsListElement instanceof HTMLElement)) {
+    return;
+  }
+
+  accountsListElement.setAttribute("aria-busy", isBusy ? "true" : "false");
+}
+
+function renderAccountsLoadError(message) {
+  if (!(accountsListElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const details =
+    typeof message === "string" && message.trim().length > 0
+      ? message.trim()
+      : "Unable to load accounts.";
+
+  accountsListElement.classList.add("is-empty");
+  accountsListElement.classList.remove("single-account");
+  accountsListElement.innerHTML = `
+    <div class="empty-state">
+      <i data-lucide="alert-triangle"></i>
+      <p>Unable to load accounts.</p>
+      <p>${escapeHtml(details)}</p>
+    </div>
+  `;
+  setAccountsListBusy(false);
+  reRenderIcons();
+}
+
 function renderAccounts(accounts) {
   if (!accountsListElement) return;
+  setAccountsListBusy(false);
 
   if (accounts.length === 0) {
     accountsListElement.classList.add("is-empty");
@@ -1879,7 +1986,8 @@ function renderAccounts(accounts) {
       <article class="account-card">
         <header class="account-top-row">
           <div class="account-actions">
-            <span class="account-state-dot ${stateDot.className}" aria-label="${escapeHtml(stateDot.label)}" title="${escapeHtml(stateDot.label)}"></span>
+            <span class="account-state-dot ${stateDot.className}" aria-hidden="true" title="${escapeHtml(stateDot.label)}"></span>
+            <span class="sr-only">Status: ${escapeHtml(stateDot.label)}</span>
             <h3 class="account-title" title="${escapeHtml(accountTitle)}">${escapeHtml(accountTitle)}</h3>
           </div>
           <div class="account-actions">
@@ -2086,12 +2194,18 @@ function renderDashboard(data) {
 }
 
 async function loadDashboard() {
+  setAccountsListBusy(true);
   try {
     const modelsPromise = loadConnectedProviderModels();
     const payload = await request("/api/dashboard");
     renderDashboard(payload);
     await modelsPromise;
   } catch (error) {
+    if (!dashboardLoaded) {
+      renderAccountsLoadError(error instanceof Error ? error.message : "Request failed.");
+    } else {
+      setAccountsListBusy(false);
+    }
     statusError = true;
     refreshTopbarStatus();
     throw error;
@@ -2171,7 +2285,7 @@ function renderConnectProviderCards() {
             ? '<p class="connect-provider-note">Strict live quota mode: usage adapter is not configured for this provider.</p>'
             : "";
       const recommendationTag = provider.recommended
-        ? '<span class="connect-provider-recommended">recomended</span>'
+        ? '<span class="connect-provider-recommended">recommended</span>'
         : "";
       const headTags = recommendationTag
         ? `<div class="connect-provider-head-tags">${recommendationTag}</div>`
@@ -2278,6 +2392,32 @@ function isConnectModalOpen() {
   return connectModalElement instanceof HTMLElement && connectModalElement.hidden === false;
 }
 
+function isModalFocusableElement(element, modalRoot) {
+  if (!(element instanceof HTMLElement) || !(modalRoot instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (element.hidden || element.getAttribute("aria-hidden") === "true") {
+    return false;
+  }
+
+  if (typeof element.closest === "function") {
+    const hiddenAncestor = element.closest("[hidden], [aria-hidden='true']");
+    if (hiddenAncestor instanceof HTMLElement && hiddenAncestor !== modalRoot) {
+      return false;
+    }
+  }
+
+  if (typeof window.getComputedStyle === "function") {
+    const styles = window.getComputedStyle(element);
+    if (styles.display === "none" || styles.visibility === "hidden") {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function getConnectModalFocusableElements() {
   if (!isConnectModalOpen()) {
     return [];
@@ -2287,21 +2427,19 @@ function getConnectModalFocusableElements() {
     "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
   const allFocusable = connectModalElement.querySelectorAll(selector);
 
-  return [...allFocusable].filter((element) => {
-    if (!(element instanceof HTMLElement)) {
-      return false;
-    }
+  return [...allFocusable].filter((element) => isModalFocusableElement(element, connectModalElement));
+}
 
-    if (element.hidden) {
-      return false;
-    }
+function getAccountSettingsModalFocusableElements() {
+  if (!isAccountSettingsModalOpen()) {
+    return [];
+  }
 
-    if (element.getAttribute("aria-hidden") === "true") {
-      return false;
-    }
+  const selector =
+    "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  const allFocusable = accountSettingsModalElement.querySelectorAll(selector);
 
-    return true;
-  });
+  return [...allFocusable].filter((element) => isModalFocusableElement(element, accountSettingsModalElement));
 }
 
 function focusConnectModalPrimaryElement() {
@@ -2375,6 +2513,7 @@ function openConnectModal() {
   hideApiLinkForm();
   renderConnectProviderCards();
   connectModalElement.hidden = false;
+  updateModalIsolationState();
   focusConnectModalPrimaryElement();
 }
 
@@ -2386,6 +2525,7 @@ function closeConnectModal() {
   hideConnectWarningTooltip();
   hideApiLinkForm();
   connectModalElement.hidden = true;
+  updateModalIsolationState();
 
   if (connectModalPreviousFocus instanceof HTMLElement) {
     connectModalPreviousFocus.focus();
@@ -2535,6 +2675,7 @@ function openAccountSettingsModal(accountId) {
   }
 
   accountSettingsModalElement.hidden = false;
+  updateModalIsolationState();
   if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
     accountSettingsDisplayNameInput.focus();
     accountSettingsDisplayNameInput.select();
@@ -2549,6 +2690,7 @@ function closeAccountSettingsModal() {
   }
 
   accountSettingsModalElement.hidden = true;
+  updateModalIsolationState();
   selectedAccountSettingsId = null;
   if (accountSettingsForm instanceof HTMLFormElement) {
     accountSettingsForm.reset();
@@ -2577,8 +2719,7 @@ function renderConnectProviders(payload) {
       const name = typeof provider.name === "string" ? provider.name : id;
       const supportsOAuth = provider.supportsOAuth === true;
       const oauthConfigured = provider.oauthConfigured === true;
-      const oauthStartPath =
-        typeof provider.oauthStartPath === "string" ? provider.oauthStartPath : null;
+      const oauthStartPath = sanitizeOauthStartPath(provider.oauthStartPath);
       const oauthOptions = Array.isArray(provider.oauthOptions)
         ? provider.oauthOptions
             .map((option) => {
@@ -2589,8 +2730,9 @@ function renderConnectProviders(payload) {
               const optionId = typeof option.id === "string" ? option.id : "";
               const optionLabel = typeof option.label === "string" ? option.label : optionId;
               const optionConfigured = option.configured === true;
-              const optionStartPath =
-                typeof option.startPath === "string" ? option.startPath : oauthStartPath;
+              const optionStartPath = sanitizeOauthStartPath(
+                typeof option.startPath === "string" ? option.startPath : oauthStartPath,
+              );
 
               if (!optionId || !optionLabel || !optionStartPath) {
                 return null;
@@ -3064,7 +3206,13 @@ document.addEventListener("click", async (event) => {
       return;
     }
 
-    window.location.assign(oauthOption.startPath);
+    const safeStartPath = sanitizeOauthStartPath(oauthOption.startPath);
+    if (!safeStartPath) {
+      showToast("OAuth start path is invalid.", true);
+      return;
+    }
+
+    window.location.assign(safeStartPath);
     return;
   }
 
@@ -3494,6 +3642,37 @@ for (const tab of sideTabs) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (isAccountSettingsModalOpen() && event.key === "Tab") {
+    const focusableElements = getAccountSettingsModalFocusableElements();
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    const currentIndex = focusableElements.indexOf(activeElement);
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey) {
+      if (currentIndex <= 0) {
+        event.preventDefault();
+        if (lastElement instanceof HTMLElement) {
+          lastElement.focus();
+        }
+      }
+      return;
+    }
+
+    if (currentIndex === -1 || currentIndex === focusableElements.length - 1) {
+      event.preventDefault();
+      if (firstElement instanceof HTMLElement) {
+        firstElement.focus();
+      }
+    }
+    return;
+  }
+
   if (isConnectModalOpen() && event.key === "Tab") {
     const focusableElements = getConnectModalFocusableElements();
     if (focusableElements.length === 0) {
