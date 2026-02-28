@@ -525,15 +525,12 @@ export class ConnectorService {
 
       decision = {
         routedTo: {
-          id: selected.id,
           provider: selected.provider,
           authMethod: selected.authMethod ?? "oauth",
-          providerAccountId: selected.providerAccountId,
           displayName: selected.displayName,
         },
         unitsConsumed: safeUnits,
         quotaConsumed,
-        authorizationHeader: `Bearer ${selected.accessToken}`,
         remaining: {
           fiveHour: remainingQuota(selected.quota.fiveHour),
           weekly: remainingQuota(selected.quota.weekly),

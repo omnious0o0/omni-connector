@@ -1,21 +1,22 @@
 import crypto from "node:crypto";
 import { Response as ExpressResponse, Router } from "express";
 import { HttpError } from "../errors";
-import { ConnectorService } from "../services/connector";
 import { resilientFetch } from "../services/http-resilience";
 import { ConnectedAccount, ProviderId } from "../types";
 
+interface OpenAiConnectorService {
+  routeCandidates(apiKey: string, units: number, modelHint?: string): Promise<ConnectedAccount[]>;
+  consumeRoutedUsage(accountId: string, units: number): void;
+}
+
 interface OpenAiRouterDependencies {
-  connectorService: ConnectorService;
+  connectorService: OpenAiConnectorService;
   providerInferenceBaseUrls: Record<ProviderId, string>;
   codexChatgptBaseUrl: string;
 }
 
 interface ProviderFailureDetail {
   provider: ProviderId;
-  accountId: string;
-  providerAccountId: string;
-  displayName: string;
   status: number | null;
   message: string;
 }
@@ -75,7 +76,8 @@ function sanitizeExternalErrorMessage(rawMessage: string, fallback: string): str
 
   const redacted = normalized
     .replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi, "$1[redacted]")
-    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]")
+    .replace(/(\b(?:key|api_key|apikey|token|access_token|refresh_token)=)([^\s&]+)/gi, "$1[redacted]")
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]{10,}/gi, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|xox[baprs]-[A-Za-z0-9-]+)\b/g, "[redacted]");
 
   return redacted.slice(0, EXTERNAL_ERROR_MESSAGE_MAX_LENGTH);
@@ -394,6 +396,10 @@ function anthropicStopReasonToOpenAi(reason: unknown): string {
 function toOpenAiErrorType(status: number): string {
   if (status >= 500) {
     return "server_error";
+  }
+
+  if (status === 429) {
+    return "rate_limit_error";
   }
 
   if (status === 401 || status === 403) {
@@ -915,9 +921,6 @@ export function createOpenAiRouter(dependencies: OpenAiRouterDependencies): Rout
 
           failures.push({
             provider: candidate.provider,
-            accountId: candidate.id,
-            providerAccountId: candidate.providerAccountId,
-            displayName: candidate.displayName,
             status,
             message,
           });

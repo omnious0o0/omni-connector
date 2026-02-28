@@ -198,15 +198,12 @@ export interface ConnectedProviderModelsPayload {
 
 export interface RouteDecision {
   routedTo: {
-    id: string;
     provider: ProviderId;
     authMethod?: AccountAuthMethod;
-    providerAccountId: string;
     displayName: string;
   };
   unitsConsumed: number;
   quotaConsumed?: boolean;
-  authorizationHeader: string;
   remaining: {
     fiveHour: number;
     weekly: number;

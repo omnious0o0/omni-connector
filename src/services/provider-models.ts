@@ -11,6 +11,7 @@ const PROVIDER_ORDER: ProviderId[] = ["codex", "gemini", "claude", "openrouter"]
 const CODEX_MODELS_CLIENT_VERSION = "0.99.0";
 const GEMINI_CODE_ASSIST_BASE_URL = "https://cloudcode-pa.googleapis.com";
 const GEMINI_CODE_ASSIST_API_VERSION = "v1internal";
+const EXTERNAL_ERROR_MESSAGE_MAX_LENGTH = 260;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -59,12 +60,27 @@ function sortModelIds(modelIds: Iterable<string>): string[] {
   return [...new Set(modelIds)].sort((left, right) => left.localeCompare(right));
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim();
+function sanitizeExternalErrorMessage(rawMessage: string, fallback: string): string {
+  const normalized = rawMessage.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return fallback;
   }
 
-  return "request failed";
+  const redacted = normalized
+    .replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi, "$1[redacted]")
+    .replace(/(\b(?:key|api_key|apikey|token|access_token|refresh_token)=)([^\s&]+)/gi, "$1[redacted]")
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]{10,}/gi, "$1[redacted]")
+    .replace(/\b(sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|xox[baprs]-[A-Za-z0-9-]+)\b/g, "[redacted]");
+
+  return redacted.slice(0, EXTERNAL_ERROR_MESSAGE_MAX_LENGTH);
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return sanitizeExternalErrorMessage(error.message, "request failed");
+  }
+
+  return sanitizeExternalErrorMessage("request failed", "request failed");
 }
 
 export class ProviderModelsService {
