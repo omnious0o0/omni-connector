@@ -963,6 +963,34 @@ test("returns 404 for missing /assets files instead of SPA fallback HTML", async
   }
 });
 
+test("dashboard UI uses automatic live refresh without manual refresh controls", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const page = await supertest(app)
+      .get("/")
+      .expect(200)
+      .expect("content-type", /html/);
+
+    assert.equal(page.text.includes('id="refresh-dashboard"'), false);
+    assert.equal(page.text.includes('id="settings-auto-refresh"'), false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("accepts callback from earlier OAuth start when multiple starts were initiated", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer();
@@ -2105,6 +2133,9 @@ test("links distinct accounts even when OAuth workspace id is shared", async () 
 test("lists providers and links API-key account for non-OAuth provider", async () => {
   const temp = createTempDataPath();
   const isolatedGeminiEnvKeys = [
+    "CODEX_OAUTH_LABEL",
+    "GEMINI_CLI_OAUTH_LABEL",
+    "GEMINI_ANTIGRAVITY_OAUTH_LABEL",
     "GEMINI_CLI_OAUTH_CLIENT_ID",
     "GEMINI_CLI_OAUTH_CLIENT_SECRET",
     "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID",
@@ -2118,6 +2149,8 @@ test("lists providers and links API-key account for non-OAuth provider", async (
   for (const key of isolatedGeminiEnvKeys) {
     delete process.env[key];
   }
+  process.env.GEMINI_CLI_OAUTH_LABEL = "   ";
+  process.env.GEMINI_ANTIGRAVITY_OAUTH_LABEL = "";
   const previousGeminiAutoDiscover = process.env.GEMINI_OAUTH_AUTO_DISCOVER;
   process.env.GEMINI_OAUTH_AUTO_DISCOVER = "false";
 
@@ -2144,6 +2177,7 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     const providersResponse = await agent.get("/api/auth/providers").expect(200);
     const providers = providersResponse.body.providers as Array<{
       id: string;
+      name: string;
       supportsOAuth: boolean;
       supportsApiKey: boolean;
       oauthConfigured: boolean;
@@ -2152,6 +2186,7 @@ test("lists providers and links API-key account for non-OAuth provider", async (
       warnings?: string[];
       oauthOptions?: Array<{
         id: string;
+        label: string;
         configured: boolean;
         startPath: string;
         requiredClientIdEnv?: string | null;
@@ -2166,6 +2201,7 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     );
 
     const geminiProvider = providers.find((provider) => provider.id === "gemini");
+    assert.equal(geminiProvider?.name, "Google");
     assert.equal(geminiProvider?.supportsOAuth, true);
     assert.equal(geminiProvider?.oauthConfigured, false);
     assert.equal(geminiProvider?.supportsApiKey, true);
@@ -2174,17 +2210,26 @@ test("lists providers and links API-key account for non-OAuth provider", async (
     assert.equal(geminiOauthOptionIds.has("gemini-cli"), true);
     assert.equal(geminiOauthOptionIds.has("antigravity"), true);
     const geminiCliOption = (geminiProvider?.oauthOptions ?? []).find((option) => option.id === "gemini-cli");
+    assert.equal(geminiCliOption?.label, "Gemini CLI");
     assert.equal(geminiCliOption?.requiredClientIdEnv, "GEMINI_CLI_OAUTH_CLIENT_ID");
     assert.equal(
       geminiCliOption?.configurationHint,
       "OAuth not configured. Install @google/gemini-cli for auto-discovery, or set GEMINI_CLI_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
     const geminiAntigravityOption = (geminiProvider?.oauthOptions ?? []).find((option) => option.id === "antigravity");
+    assert.equal(geminiAntigravityOption?.label, "Antigravity");
     assert.equal(geminiAntigravityOption?.requiredClientIdEnv, "GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID");
     assert.equal(
       geminiAntigravityOption?.configurationHint,
       "OAuth not configured. Install Antigravity or OpenClaw for auto-discovery, or set GEMINI_ANTIGRAVITY_OAUTH_CLIENT_ID in .env and restart omni-connector.",
     );
+
+    const codexProvider = providers.find((provider) => provider.id === "codex");
+    assert.equal(codexProvider?.name, "OpenAI");
+    const codexOauthOptionIds = new Set((codexProvider?.oauthOptions ?? []).map((option) => option.id));
+    assert.equal(codexOauthOptionIds.has("oauth"), true);
+    const codexOauthOption = (codexProvider?.oauthOptions ?? []).find((option) => option.id === "oauth");
+    assert.equal(codexOauthOption?.label, "Codex");
 
     const openRouterProvider = providers.find((provider) => provider.id === "openrouter");
     assert.equal(openRouterProvider?.recommended, true);

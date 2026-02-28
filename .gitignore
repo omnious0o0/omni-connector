@@ -9,3 +9,4 @@ coverage/
 AGENTS.md
 reference/
 tests/
+.sisyphus/
