@@ -983,6 +983,70 @@ function cadenceLabelFromMinutes(windowMinutes) {
   return `${roundedMinutes}m`;
 }
 
+function cadenceLabelFromText(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const text = value.trim().toLowerCase();
+  if (text.length === 0) {
+    return "";
+  }
+
+  if (text.includes("daily") || text.includes("per day") || text.includes("per-day") || text.includes("per_day")) {
+    return "1d";
+  }
+
+  if (text.includes("weekly") || text.includes("per week") || text.includes("per-week") || text.includes("per_week")) {
+    return "7d";
+  }
+
+  if (text.includes("hourly") || text.includes("per hour") || text.includes("per-hour") || text.includes("per_hour")) {
+    return "1h";
+  }
+
+  if (text.includes("an hour") || text.includes("one hour")) {
+    return "1h";
+  }
+
+  if (text.includes("a day") || text.includes("one day")) {
+    return "1d";
+  }
+
+  if (text.includes("a week") || text.includes("one week")) {
+    return "7d";
+  }
+
+  const tokenMatch = /(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b/i.exec(text);
+  if (!tokenMatch) {
+    return "";
+  }
+
+  const valueNumber = Number(tokenMatch[1]);
+  if (!Number.isFinite(valueNumber) || valueNumber <= 0) {
+    return "";
+  }
+
+  const unit = (tokenMatch[2] ?? "").toLowerCase();
+  if (unit.startsWith("m")) {
+    return `${Math.round(valueNumber)}m`;
+  }
+
+  if (unit.startsWith("h")) {
+    return `${Math.round(valueNumber)}h`;
+  }
+
+  if (unit.startsWith("d")) {
+    return `${Math.round(valueNumber)}d`;
+  }
+
+  if (unit.startsWith("w")) {
+    return `${Math.round(valueNumber * 7)}d`;
+  }
+
+  return "";
+}
+
 function normalizeQuotaLabel(labelValue) {
   if (typeof labelValue !== "string") {
     return "";
@@ -995,6 +1059,17 @@ function normalizeQuotaLabel(labelValue) {
 
   const compact = trimmed.replace(/[_\s-]+/g, "").toLowerCase();
   if (compact === "requests" || compact === "tokens" || compact === "calls") {
+    return "";
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (
+    /^resets?\s+in\b/.test(lower) ||
+    /^resets?\s+at\b/.test(lower) ||
+    /^recharges?\s+in\b/.test(lower) ||
+    /^renews?\s+in\b/.test(lower) ||
+    /^next\s+reset\b/.test(lower)
+  ) {
     return "";
   }
 
@@ -1058,6 +1133,8 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
   const scheduleDurationMs =
     windowMinutes !== null ? windowMinutes * 60_000 : Number.isFinite(inferredDurationMs) ? inferredDurationMs : null;
   const explicitLabel = normalizeQuotaLabel(windowData?.label);
+  const explicitCadenceLabel = cadenceLabelFromText(explicitLabel);
+  const scheduleLabel = quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt);
   const limit = Number(windowData?.limit);
   const used = Number(windowData?.used);
   const remaining = Number(windowData?.remaining);
@@ -1067,7 +1144,7 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
 
   return {
     ...presentation,
-    label: explicitLabel || quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt),
+    label: explicitCadenceLabel || scheduleLabel || explicitLabel,
     windowMinutes,
     scheduleDurationMs,
     limit: safeLimit,
@@ -1390,9 +1467,34 @@ function buildDashboardWindowMetrics(accounts) {
     });
 }
 
+function metricCadenceLabel(metric) {
+  const rawWindowMinutes = Number(metric?.windowMinutes);
+  if (Number.isFinite(rawWindowMinutes) && rawWindowMinutes > 0) {
+    const minutesLabel = cadenceLabelFromMinutes(rawWindowMinutes);
+    if (minutesLabel.length > 0) {
+      return minutesLabel;
+    }
+  }
+
+  const rawScheduleDurationMs = Number(metric?.scheduleDurationMs);
+  if (Number.isFinite(rawScheduleDurationMs) && rawScheduleDurationMs > 0) {
+    const scheduleLabel = cadenceLabelFromMinutes(Math.round(rawScheduleDurationMs / 60_000));
+    if (scheduleLabel.length > 0) {
+      return scheduleLabel;
+    }
+  }
+
+  const labelFromText = cadenceLabelFromText(metric?.label);
+  if (labelFromText.length > 0) {
+    return labelFromText;
+  }
+
+  return normalizeQuotaLabel(metric?.label);
+}
+
 function updateMetricWindowLabels(primaryMetric, secondaryMetric) {
-  const primaryLabel = typeof primaryMetric?.label === "string" ? primaryMetric.label.trim() : "";
-  const secondaryLabel = typeof secondaryMetric?.label === "string" ? secondaryMetric.label.trim() : "";
+  const primaryLabel = metricCadenceLabel(primaryMetric);
+  const secondaryLabel = metricCadenceLabel(secondaryMetric);
   if (metricWindowALabelElement instanceof HTMLElement) {
     metricWindowALabelElement.textContent = primaryLabel.length > 0 ? `${primaryLabel} Quota` : "";
   }
