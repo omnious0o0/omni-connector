@@ -1,4 +1,4 @@
-import { AppConfig, ProviderUsageConfig } from "../config";
+import { AppConfig, ProviderUsageConfig, isLoopbackHost } from "../config";
 import { HttpError } from "../errors";
 import { ConnectedAccount, ProviderId, QuotaSyncIssue, QuotaWindowMode } from "../types";
 import { resilientFetch } from "./http-resilience";
@@ -259,11 +259,7 @@ function normalizeLimit(limit: number): number {
 
 function ensureHttpsUrl(rawUrl: string): string {
   const parsed = new URL(rawUrl);
-  if (
-    parsed.protocol !== "https:" &&
-    parsed.hostname !== "localhost" &&
-    parsed.hostname !== "127.0.0.1"
-  ) {
+  if (parsed.protocol !== "https:" && !isLoopbackHost(parsed.hostname)) {
     throw new HttpError(500, "invalid_usage_url", "Usage URL must use HTTPS.");
   }
 

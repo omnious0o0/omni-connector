@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { AppConfig, OAuthProviderProfileConfig } from "../config";
+import { AppConfig, OAuthProviderProfileConfig, isLoopbackHost } from "../config";
 import { HttpError } from "../errors";
 import { OAuthLinkedAccountPayload, ProviderId, QuotaWindowMode } from "../types";
 import {
@@ -278,11 +278,7 @@ function toTokenExpiresAt(expiresInSeconds: unknown): string {
 function ensureHttpsUrl(rawUrl: string): string {
   try {
     const parsed = new URL(rawUrl);
-    if (
-      parsed.protocol !== "https:" &&
-      parsed.hostname !== "localhost" &&
-      parsed.hostname !== "127.0.0.1"
-    ) {
+    if (parsed.protocol !== "https:" && !isLoopbackHost(parsed.hostname)) {
       throw new Error("OAuth endpoints must use HTTPS.");
     }
 

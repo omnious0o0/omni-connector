@@ -211,6 +211,38 @@ test("redirectUriFor keeps configured callback for custom Codex client", () => {
   assert.equal(service.redirectUriFor("codex", "oauth"), "http://127.0.0.1:1455/auth/callback");
 });
 
+test("allows loopback HTTP OAuth endpoint URLs on IPv6 localhost", () => {
+  const service = createService({
+      oauthAuthorizationUrl: "http://[::1]:1455/oauth/authorize",
+      oauthTokenUrl: "http://[::1]:1455/oauth/token",
+      oauthUserInfoUrl: "http://[::1]:1455/oauth/userinfo",
+    });
+
+  assert.doesNotThrow(() =>
+    service.authorizationUrl({
+      state: "state-test",
+      redirectUri: "http://localhost:1455/auth/callback",
+      codeChallenge: "challenge-test",
+    }),
+  );
+});
+
+test("rejects spoofed loopback hostnames for OAuth HTTP endpoints", () => {
+  const service = createService({
+    oauthAuthorizationUrl: "http://127.evil.com/oauth/authorize",
+  });
+
+  assert.throws(
+    () =>
+      service.authorizationUrl({
+        state: "state-test",
+        redirectUri: "http://localhost:1455/auth/callback",
+        codeChallenge: "challenge-test",
+      }),
+    (error: unknown) => error instanceof HttpError && error.status === 500 && error.code === "invalid_oauth_configuration",
+  );
+});
+
 test("refreshAccessTokenFor refreshes Gemini OAuth tokens with profile-specific client credentials", async () => {
   const defaults = resolveConfig({
     HOST: "127.0.0.1",
