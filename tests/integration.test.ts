@@ -963,34 +963,6 @@ test("returns 404 for missing /assets files instead of SPA fallback HTML", async
   }
 });
 
-test("dashboard UI uses automatic live refresh without manual refresh controls", async () => {
-  const temp = createTempDataPath();
-
-  try {
-    const app = createApp({
-      dataFilePath: temp.dataFilePath,
-      sessionSecret: "test-session-secret",
-      publicDir: path.join(process.cwd(), "public"),
-      port: 0,
-      oauthRequireQuota: false,
-      defaultFiveHourLimit: 0,
-      defaultWeeklyLimit: 0,
-      defaultFiveHourUsed: 0,
-      defaultWeeklyUsed: 0,
-    });
-
-    const page = await supertest(app)
-      .get("/")
-      .expect(200)
-      .expect("content-type", /html/);
-
-    assert.equal(page.text.includes('id="refresh-dashboard"'), false);
-    assert.equal(page.text.includes('id="settings-auto-refresh"'), false);
-  } finally {
-    temp.cleanup();
-  }
-});
-
 test("accepts callback from earlier OAuth start when multiple starts were initiated", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer();

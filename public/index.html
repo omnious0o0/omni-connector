@@ -70,6 +70,9 @@
           <button id="connect-trigger" class="btn btn-primary" type="button">
             <i data-lucide="plus"></i> Connect
           </button>
+          <button id="refresh-dashboard" class="btn btn-outline" type="button">
+            <i data-lucide="refresh-cw"></i> Refresh
+          </button>
         </div>
       </nav>
     </aside>
@@ -281,6 +284,17 @@
 
           <section class="settings-card">
             <h4>Interaction</h4>
+
+            <label class="settings-switch" for="settings-auto-refresh">
+              <div class="settings-switch-copy">
+                <p class="settings-switch-title">Auto refresh dashboard</p>
+                <p class="settings-switch-note">Refresh usage and account status every 30 seconds.</p>
+              </div>
+              <span class="switch-control">
+                <input id="settings-auto-refresh" type="checkbox" />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </span>
+            </label>
 
             <label class="settings-switch" for="settings-confirm-removal">
               <div class="settings-switch-copy">

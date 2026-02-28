@@ -17,6 +17,7 @@ const revealKeyInput = document.querySelector("#settings-reveal-key");
 const maskRoutePayloadInput = document.querySelector("#settings-mask-route-payload");
 const compactCardsInput = document.querySelector("#settings-compact-cards");
 const defaultCollapsedInput = document.querySelector("#settings-default-collapsed");
+const autoRefreshInput = document.querySelector("#settings-auto-refresh");
 const confirmRemovalInput = document.querySelector("#settings-confirm-removal");
 const rememberPageTabInput = document.querySelector("#settings-remember-page-tab");
 const keyAccessNote = document.querySelector("#key-access-note");
@@ -80,6 +81,7 @@ let revealApiKeyByDefault = false;
 let maskRoutePayload = true;
 let compactCards = true;
 let defaultSidebarCollapsed = false;
+let autoRefreshEnabled = false;
 let confirmRemoval = true;
 let rememberPageTab = true;
 let forceRevealApiKey = null;
@@ -90,9 +92,6 @@ let resizingStartX = 0;
 let resizingStartWidth = 0;
 let autoRefreshTimer = null;
 let autoRefreshInFlight = false;
-let quotaLiveFollowUpTimer = null;
-let quotaLiveFollowUpAttempts = 0;
-let quotaLiveFollowUpInFlight = false;
 let lastRoutingPreferencesPayload = null;
 let clockTimer = null;
 let providerConfigured = null;
@@ -124,6 +123,7 @@ const STORAGE_KEYS = {
   maskRoutePayload: `${STORAGE_KEY_PREFIX}.mask-route-payload`,
   compactCards: `${STORAGE_KEY_PREFIX}.compact-cards`,
   defaultSidebarCollapsed: `${STORAGE_KEY_PREFIX}.default-sidebar-collapsed`,
+  autoRefreshEnabled: `${STORAGE_KEY_PREFIX}.auto-refresh`,
   confirmRemoval: `${STORAGE_KEY_PREFIX}.confirm-removal`,
   rememberPageTab: `${STORAGE_KEY_PREFIX}.remember-page-tab`,
   activeView: `${STORAGE_KEY_PREFIX}.active-view`,
@@ -138,8 +138,6 @@ const LEGACY_STORAGE_KEYS = Object.freeze(
 );
 
 const AUTO_REFRESH_INTERVAL_MS = 30_000;
-const QUOTA_LIVE_FOLLOW_UP_DELAY_MS = 2_500;
-const QUOTA_LIVE_FOLLOW_UP_MAX_ATTEMPTS = 4;
 const KNOWN_PROVIDER_IDS = ["codex", "gemini", "claude", "openrouter"];
 
 if (window.lucide) {
@@ -323,6 +321,7 @@ function persistUiSettings() {
     window.localStorage.setItem(STORAGE_KEYS.maskRoutePayload, maskRoutePayload ? "1" : "0");
     window.localStorage.setItem(STORAGE_KEYS.compactCards, compactCards ? "1" : "0");
     window.localStorage.setItem(STORAGE_KEYS.defaultSidebarCollapsed, defaultSidebarCollapsed ? "1" : "0");
+    window.localStorage.setItem(STORAGE_KEYS.autoRefreshEnabled, autoRefreshEnabled ? "1" : "0");
     window.localStorage.setItem(STORAGE_KEYS.confirmRemoval, confirmRemoval ? "1" : "0");
     window.localStorage.setItem(STORAGE_KEYS.rememberPageTab, rememberPageTab ? "1" : "0");
     if (rememberPageTab) {
@@ -345,6 +344,7 @@ function loadUiSettings() {
   maskRoutePayload = readStoredBoolean(STORAGE_KEYS.maskRoutePayload, true);
   compactCards = readStoredBoolean(STORAGE_KEYS.compactCards, true);
   defaultSidebarCollapsed = readStoredBoolean(STORAGE_KEYS.defaultSidebarCollapsed, false);
+  autoRefreshEnabled = readStoredBoolean(STORAGE_KEYS.autoRefreshEnabled, false);
   confirmRemoval = readStoredBoolean(STORAGE_KEYS.confirmRemoval, true);
   rememberPageTab = readStoredBoolean(STORAGE_KEYS.rememberPageTab, true);
 
@@ -434,6 +434,10 @@ function applySettingsState() {
     defaultCollapsedInput.checked = defaultSidebarCollapsed;
   }
 
+  if (autoRefreshInput instanceof HTMLInputElement) {
+    autoRefreshInput.checked = autoRefreshEnabled;
+  }
+
   if (confirmRemovalInput instanceof HTMLInputElement) {
     confirmRemovalInput.checked = confirmRemoval;
   }
@@ -464,83 +468,10 @@ function stopAutoRefreshTimer() {
   }
 }
 
-function stopQuotaLiveFollowUp(resetAttempts = true) {
-  if (quotaLiveFollowUpTimer !== null) {
-    window.clearTimeout(quotaLiveFollowUpTimer);
-    quotaLiveFollowUpTimer = null;
-  }
-
-  if (resetAttempts) {
-    quotaLiveFollowUpAttempts = 0;
-  }
-}
-
-function dashboardNeedsQuotaLiveFollowUp(data) {
-  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
-  if (accounts.length === 0) {
-    return false;
-  }
-
-  return accounts.some((account) => {
-    if (!account || typeof account !== "object") {
-      return false;
-    }
-
-    const syncStatus =
-      typeof account.quotaSyncStatus === "string" ? account.quotaSyncStatus : "unavailable";
-    if (syncStatus === "live") {
-      return false;
-    }
-
-    const syncError =
-      typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
-    return syncError.length === 0;
-  });
-}
-
-function scheduleQuotaLiveFollowUp(data) {
-  if (currentView !== "overview") {
-    stopQuotaLiveFollowUp();
-    return;
-  }
-
-  if (!dashboardNeedsQuotaLiveFollowUp(data)) {
-    stopQuotaLiveFollowUp();
-    return;
-  }
-
-  if (quotaLiveFollowUpAttempts >= QUOTA_LIVE_FOLLOW_UP_MAX_ATTEMPTS) {
-    return;
-  }
-
-  if (quotaLiveFollowUpTimer !== null || quotaLiveFollowUpInFlight || autoRefreshInFlight) {
-    return;
-  }
-
-  quotaLiveFollowUpTimer = window.setTimeout(async () => {
-    quotaLiveFollowUpTimer = null;
-
-    if (currentView !== "overview" || quotaLiveFollowUpInFlight || autoRefreshInFlight) {
-      return;
-    }
-
-    quotaLiveFollowUpInFlight = true;
-    quotaLiveFollowUpAttempts += 1;
-
-    try {
-      await loadDashboard({ includeModels: false, resetQuotaFollowUp: false });
-    } catch {
-      return;
-    } finally {
-      quotaLiveFollowUpInFlight = false;
-    }
-  }, QUOTA_LIVE_FOLLOW_UP_DELAY_MS);
-}
-
 function startAutoRefreshTimer() {
   stopAutoRefreshTimer();
 
-  if (currentView !== "overview") {
+  if (!autoRefreshEnabled || currentView !== "overview") {
     return;
   }
 
@@ -551,9 +482,13 @@ function startAutoRefreshTimer() {
 
     autoRefreshInFlight = true;
     try {
-      await loadDashboard({ includeModels: false });
+      await loadDashboard();
     } catch (error) {
       showToast(error.message || "Auto refresh failed.", true);
+      stopAutoRefreshTimer();
+      autoRefreshEnabled = false;
+      persistUiSettings();
+      applySettingsState();
     } finally {
       autoRefreshInFlight = false;
     }
@@ -597,11 +532,6 @@ function setActiveView(view) {
 
   persistUiSettings();
   startAutoRefreshTimer();
-  if (currentView !== "overview") {
-    stopQuotaLiveFollowUp();
-  } else if (dashboard) {
-    scheduleQuotaLiveFollowUp(dashboard);
-  }
 }
 
 function setConnectorControlsEnabled(enabled) {
@@ -1898,21 +1828,14 @@ function renderDashboard(data) {
   renderSidebarModels(connectedProviderModelsPayload);
   applySettingsState();
   refreshTopbarStatus();
-  scheduleQuotaLiveFollowUp(data);
 }
 
-async function loadDashboard(options = {}) {
-  const includeModels = options.includeModels !== false;
-  const resetQuotaFollowUp = options.resetQuotaFollowUp !== false;
-  stopQuotaLiveFollowUp(resetQuotaFollowUp);
-
+async function loadDashboard() {
   try {
-    const modelsPromise = includeModels ? loadConnectedProviderModels() : null;
+    const modelsPromise = loadConnectedProviderModels();
     const payload = await request("/api/dashboard");
     renderDashboard(payload);
-    if (modelsPromise) {
-      await modelsPromise;
-    }
+    await modelsPromise;
   } catch (error) {
     statusError = true;
     refreshTopbarStatus();
@@ -2291,7 +2214,7 @@ function openAccountSettingsModal(accountId) {
   const connectionLabel = connectionLabelForAccount(account);
 
   if (accountSettingsProviderElement instanceof HTMLElement) {
-    accountSettingsProviderElement.textContent = `Provider: ${account.provider}`;
+    accountSettingsProviderElement.textContent = `Provider: ${connectionLabel}`;
   }
 
   if (accountSettingsAuthElement instanceof HTMLElement) {
@@ -2945,6 +2868,7 @@ document.addEventListener("click", async (event) => {
     maskRoutePayload = true;
     compactCards = true;
     defaultSidebarCollapsed = false;
+    autoRefreshEnabled = false;
     confirmRemoval = true;
     rememberPageTab = true;
     forceRevealApiKey = null;
@@ -3011,6 +2935,16 @@ document.addEventListener("click", async (event) => {
       await copyConnectorKey();
     } catch (error) {
       showToast(error.message || "Failed to copy key.", true);
+    }
+    return;
+  }
+
+  if (targetElement.closest("#refresh-dashboard")) {
+    try {
+      await loadDashboard();
+      showToast("Dashboard refreshed.");
+    } catch (error) {
+      showToast(error.message || "Refresh failed.", true);
     }
     return;
   }
@@ -3231,6 +3165,14 @@ if (defaultCollapsedInput instanceof HTMLInputElement) {
       applySidebarState();
     }
     persistUiSettings();
+  });
+}
+
+if (autoRefreshInput instanceof HTMLInputElement) {
+  autoRefreshInput.addEventListener("change", () => {
+    autoRefreshEnabled = autoRefreshInput.checked;
+    persistUiSettings();
+    startAutoRefreshTimer();
   });
 }
 
