@@ -81,6 +81,13 @@ test("dashboard keeps five-hour and weekly remaining independent", () => {
 });
 
 type AppContext = vm.Context & {
+  HTMLElement: {
+    new (): {
+      closest: (selector: string) => unknown;
+      dataset?: Record<string, string | undefined>;
+      parentElement?: unknown;
+    };
+  };
   authoritativeCadenceMinutes: (windowData: unknown, quotaSyncedAt: unknown) => number | null;
   buildCadenceConsensusByScope: (accounts: unknown[]) => Map<string, number>;
   buildSidebarModelEntries: (
@@ -94,12 +101,25 @@ type AppContext = vm.Context & {
     }>;
     normalizedSearchQuery: string;
   };
+  buildDashboardApiBalanceMetrics: (accounts: unknown[]) => {
+    primaryLabel: string;
+    primaryValue: string;
+    primaryDetail: string;
+    secondaryLabel: string;
+    secondaryValue: string;
+    secondaryDetail: string;
+  } | null;
   buildQuotaWindowView: (windowData: unknown, quotaSyncedAt: unknown) => Record<string, unknown>;
+  copySidebarModelId: (fullModelId: unknown) => Promise<void>;
   composeProviderModelId: (providerId: unknown, modelId: unknown) => string;
+  formatBalanceValue: (value: unknown) => string;
+  matchesSidebarModelSearch: (modelId: unknown, normalizedSearchQuery: unknown) => boolean;
   normalizeSidebarModelSearchQuery: (value: unknown) => string;
   normalizedAccountQuotaWindows: (account: unknown) => unknown[];
+  renderApiBalanceBlock: (account: unknown) => string;
   resolveQuotaWindowLabel: (account: unknown, slot: string, windowView: unknown) => string;
   quotaWindowSignature: (windowView: unknown) => string;
+  __documentListeners?: Map<string, Array<(event: { target: unknown }) => unknown>>;
   __consensus?: Map<string, number>;
 };
 
@@ -112,10 +132,20 @@ function loadFrontendAppContext(): AppContext {
   class HTMLSelectElement extends HTMLElement {}
   class HTMLTextAreaElement extends HTMLElement {}
 
+  const documentListeners = new Map<string, Array<(event: { target: unknown }) => unknown>>();
+
   const documentStub = {
     querySelector: () => null,
     querySelectorAll: () => [],
-    addEventListener: () => undefined,
+    addEventListener: (eventType: string, listener: ((event: { target: unknown }) => unknown) | null) => {
+      if (typeof listener !== "function") {
+        return;
+      }
+
+      const existing = documentListeners.get(eventType) ?? [];
+      existing.push(listener);
+      documentListeners.set(eventType, existing);
+    },
     activeElement: null,
   };
 
@@ -202,6 +232,7 @@ function loadFrontendAppContext(): AppContext {
   const appScriptPath = path.join(process.cwd(), "public", "app.js");
   const appScriptSource = fs.readFileSync(appScriptPath, "utf8");
   vm.runInContext(appScriptSource, context, { filename: appScriptPath });
+  context.__documentListeners = documentListeners;
   return context;
 }
 
@@ -355,6 +386,8 @@ test("frontend sidebar model helpers normalize IDs and queries", () => {
   assert.equal(context.composeProviderModelId("gemini", "gemini-2.5-pro"), "gemini/gemini-2.5-pro");
   assert.equal(context.composeProviderModelId("gemini", " gemini/gemini-2.5-pro "), "gemini/gemini-2.5-pro");
   assert.equal(context.composeProviderModelId("gemini", "/gemini-2.5-pro"), "gemini/gemini-2.5-pro");
+  assert.equal(context.composeProviderModelId("gemini", "openrouter/deepseek-r1"), "openrouter/deepseek-r1");
+  assert.equal(context.composeProviderModelId("gemini", "vendor/custom-model"), "gemini/vendor/custom-model");
   assert.equal(context.composeProviderModelId("unknown", "custom-model"), "custom-model");
 });
 
@@ -369,6 +402,7 @@ test("frontend sidebar model builder dedupes, prefixes, sorts, and filters", () 
         status: "live",
         modelIds: [
           " gemini-2.5-pro ",
+          "GEMINI/gemini-2.5-pro",
           "gemini/gemini-2.0-flash",
           "/gemini-2.5-pro",
           "",
@@ -411,4 +445,197 @@ test("frontend sidebar model builder dedupes, prefixes, sorts, and filters", () 
   ) as ReturnType<AppContext["buildSidebarModelEntries"]>;
 
   assert.equal(noMatchEntries.visibleProviders.length, 0);
+
+  const nullQueryEntries = JSON.parse(
+    JSON.stringify(context.buildSidebarModelEntries(payload, null)),
+  ) as ReturnType<AppContext["buildSidebarModelEntries"]>;
+
+  assert.equal(nullQueryEntries.normalizedSearchQuery, "");
+  assert.equal(nullQueryEntries.visibleProviders.length, 1);
+  assert.deepEqual(nullQueryEntries.visibleProviders[0]?.modelIds, [
+    "gemini/gemini-1.5-pro",
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-pro",
+  ]);
+});
+
+test("frontend sidebar search matches case-insensitive multi-token queries", () => {
+  const context = loadFrontendAppContext();
+
+  const payload = {
+    providers: [
+      {
+        provider: "gemini",
+        accountCount: 1,
+        status: "live",
+        modelIds: ["gemini-2.5-pro-preview", "gemini-2.0-flash"],
+        syncError: null,
+      },
+    ],
+  };
+
+  const tokenFiltered = JSON.parse(
+    JSON.stringify(context.buildSidebarModelEntries(payload, " GEmini   2.5   pro ")),
+  ) as ReturnType<AppContext["buildSidebarModelEntries"]>;
+
+  assert.equal(tokenFiltered.visibleProviders.length, 1);
+  assert.deepEqual(tokenFiltered.visibleProviders[0]?.modelIds, ["gemini/gemini-2.5-pro-preview"]);
+
+  assert.equal(context.matchesSidebarModelSearch("gemini/gemini-2.5-pro-preview", "2.5 preview"), true);
+  assert.equal(context.matchesSidebarModelSearch("gemini/gemini-2.5-pro-preview", "2.5 sonnet"), false);
+});
+
+test("frontend copySidebarModelId handles success, empty id, and missing clipboard", async () => {
+  const context = loadFrontendAppContext();
+  const contextState = context as unknown as {
+    navigator: {
+      clipboard: {
+        writeText: (value: string) => Promise<void>;
+      } | null;
+    };
+  };
+
+  const writes: string[] = [];
+  contextState.navigator.clipboard = {
+    writeText: async (value: string) => {
+      writes.push(value);
+    },
+  };
+
+  await context.copySidebarModelId(" gemini/gemini-2.5-pro ");
+  assert.deepEqual(writes, ["gemini/gemini-2.5-pro"]);
+
+  await context.copySidebarModelId("   ");
+  assert.deepEqual(writes, ["gemini/gemini-2.5-pro"]);
+
+  contextState.navigator.clipboard = null;
+  await assert.rejects(
+    () => context.copySidebarModelId("gemini/gemini-2.5-pro"),
+    /Clipboard is unavailable in this browser/,
+  );
+});
+
+test("frontend click handler surfaces clipboard write failures for model copy", async () => {
+  const context = loadFrontendAppContext();
+  const contextState = context as unknown as {
+    navigator: {
+      clipboard: {
+        writeText: (value: string) => Promise<void>;
+      };
+    };
+    __testToasts: Array<{ message: string; isError: boolean }>;
+  };
+
+  contextState.__testToasts = [];
+  vm.runInContext(
+    `showToast = (message, isError = false) => { __testToasts.push({ message: String(message), isError: Boolean(isError) }); };`,
+    context,
+  );
+
+  contextState.navigator.clipboard.writeText = async () => {
+    throw new Error("clipboard offline");
+  };
+
+  const listeners = context.__documentListeners?.get("click") ?? [];
+  assert.equal(listeners.length > 0, true);
+  const clickHandler = listeners[0];
+  assert.equal(typeof clickHandler, "function");
+
+  const target = new context.HTMLElement();
+  target.dataset = {
+    copyModelId: "gemini/gemini-2.5-pro",
+  };
+  target.closest = (selector: string) =>
+    selector === "[data-copy-model-id]" ? target : null;
+
+  await clickHandler?.({ target });
+
+  const normalizedToasts = JSON.parse(
+    JSON.stringify(contextState.__testToasts),
+  ) as Array<{ message: string; isError: boolean }>;
+  assert.deepEqual(normalizedToasts, [{ message: "clipboard offline", isError: true }]);
+});
+
+test("frontend quota label fallback uses API balance wording for API-linked accounts", () => {
+  const context = loadFrontendAppContext();
+
+  const apiLabel = context.resolveQuotaWindowLabel(
+    {
+      authMethod: "api",
+      provider: "openrouter",
+    },
+    "fiveHour",
+    {
+      cadenceLabel: "",
+      explicitLabel: "",
+    },
+  );
+  assert.equal(apiLabel, "API balance");
+
+  const oauthLabel = context.resolveQuotaWindowLabel(
+    {
+      authMethod: "oauth",
+      provider: "gemini",
+      oauthProfileId: "gemini-cli",
+    },
+    "fiveHour",
+    {
+      cadenceLabel: "",
+      explicitLabel: "",
+    },
+  );
+  assert.equal(oauthLabel, "Quota");
+});
+
+test("frontend API balance helpers render readable values and account metrics", () => {
+  const context = loadFrontendAppContext();
+
+  assert.match(context.formatBalanceValue("$1,234.50"), /1,234\.50/);
+  assert.match(context.formatBalanceValue("credits: 80"), /80/);
+  assert.equal(context.formatBalanceValue(""), "$0.00");
+
+  const balanceMarkup = context.renderApiBalanceBlock({
+    authMethod: "api",
+    creditsBalance: "125.25",
+    planType: "pro",
+  });
+  assert.equal(balanceMarkup.includes("API balance"), true);
+  assert.equal(balanceMarkup.includes("125.25"), true);
+  assert.equal(balanceMarkup.includes("pro plan"), false);
+
+  const summary = context.buildDashboardApiBalanceMetrics([
+    {
+      authMethod: "api",
+      creditsBalance: "10",
+    },
+    {
+      authMethod: "api",
+      creditsBalance: "20",
+    },
+  ]);
+
+  assert.ok(summary);
+  assert.equal(summary?.primaryLabel, "Total API Balance");
+  assert.match(String(summary?.primaryValue ?? ""), /30\.00/);
+  assert.match(String(summary?.primaryDetail ?? ""), /Across 2 API accounts/);
+  assert.equal(summary?.secondaryLabel, "API Accounts");
+  assert.equal(summary?.secondaryValue, "2");
+  assert.equal(summary?.secondaryDetail, "2 with live balance");
+});
+
+test("frontend API balance summary is disabled for mixed auth dashboards", () => {
+  const context = loadFrontendAppContext();
+
+  const mixedSummary = context.buildDashboardApiBalanceMetrics([
+    {
+      authMethod: "api",
+      creditsBalance: "10",
+    },
+    {
+      authMethod: "oauth",
+      creditsBalance: "90",
+    },
+  ]);
+
+  assert.equal(mixedSummary, null);
 });

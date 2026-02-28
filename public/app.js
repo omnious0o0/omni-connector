@@ -44,11 +44,6 @@ const apiLinkProviderElement = document.querySelector("#api-link-provider");
 const apiLinkDisplayNameInput = document.querySelector("#api-link-display-name");
 const apiLinkProviderAccountIdInput = document.querySelector("#api-link-provider-account-id");
 const apiLinkKeyInput = document.querySelector("#api-link-key");
-const apiLinkManualFiveHourInput = document.querySelector("#api-link-manual-5h");
-const apiLinkManualWeeklyInput = document.querySelector("#api-link-manual-7d");
-const apiLinkManualFiveHourLabel = document.querySelector('label[for="api-link-manual-5h"]');
-const apiLinkManualWeeklyLabel = document.querySelector('label[for="api-link-manual-7d"]');
-const apiLinkManualNoteElement = document.querySelector("#api-link-manual-note");
 const apiLinkCancelButton = document.querySelector("#api-link-cancel");
 const accountSettingsModalElement = document.querySelector("#account-settings-modal");
 const accountSettingsCloseButton = document.querySelector("#account-settings-close");
@@ -64,11 +59,6 @@ const accountSettingsSyncGuidanceTitleElement = document.querySelector("#account
 const accountSettingsSyncGuidanceStepsElement = document.querySelector("#account-settings-sync-guidance-steps");
 const accountSettingsSyncGuidanceActionElement = document.querySelector("#account-settings-sync-guidance-action");
 const accountSettingsDisplayNameInput = document.querySelector("#account-settings-display-name");
-const accountSettingsApiLimitsElement = document.querySelector("#account-settings-api-limits");
-const accountSettingsFiveHourInput = document.querySelector("#account-settings-5h");
-const accountSettingsWeeklyInput = document.querySelector("#account-settings-7d");
-const accountSettingsFiveHourLabel = document.querySelector('label[for="account-settings-5h"]');
-const accountSettingsWeeklyLabel = document.querySelector('label[for="account-settings-7d"]');
 const accountSettingsCancelButton = document.querySelector("#account-settings-cancel");
 const metricWindowALabelElement = document.querySelector("#metric-window-a-label");
 const metricWindowBLabelElement = document.querySelector("#metric-window-b-label");
@@ -101,7 +91,6 @@ let statusError = false;
 let connectProviders = [];
 let connectProvidersLoading = true;
 let selectedApiProviderId = null;
-let apiLinkManualLimitsEnabled = false;
 let connectModalPreviousFocus = null;
 let accountSettingsPreviousFocus = null;
 let selectedAccountSettingsId = null;
@@ -766,6 +755,108 @@ function formatPercentValue(value) {
   return `${Math.round(safeValue)}%`;
 }
 
+const BALANCE_SYMBOL_TO_CURRENCY = Object.freeze({
+  "$": "USD",
+  "€": "EUR",
+  "£": "GBP",
+  "¥": "JPY",
+  "₹": "INR",
+});
+
+function parseBalanceNumber(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const compact = trimmed.replace(/,/g, "");
+  const direct = Number(compact);
+  if (Number.isFinite(direct)) {
+    return direct;
+  }
+
+  const numericMatch = compact.match(/-?\d+(?:\.\d+)?/);
+  if (!numericMatch) {
+    return null;
+  }
+
+  const parsed = Number(numericMatch[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSupportedCurrencyCode(currencyCode) {
+  if (typeof currencyCode !== "string") {
+    return false;
+  }
+
+  const normalized = currencyCode.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(normalized)) {
+    return false;
+  }
+
+  try {
+    new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: normalized,
+    }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function detectBalanceCurrencyCode(value) {
+  if (typeof value !== "string") {
+    return "USD";
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return "USD";
+  }
+
+  const upper = trimmed.toUpperCase();
+  const codeMatches = upper.match(/\b[A-Z]{3}\b/g) ?? [];
+  for (const code of codeMatches) {
+    if (isSupportedCurrencyCode(code)) {
+      return code;
+    }
+  }
+
+  for (const [symbol, code] of Object.entries(BALANCE_SYMBOL_TO_CURRENCY)) {
+    if (trimmed.includes(symbol)) {
+      return code;
+    }
+  }
+
+  return "USD";
+}
+
+function formatBalanceValue(value, currencyCodeHint = null) {
+  const parsed = parseBalanceNumber(value);
+  const resolvedCurrencyCode =
+    isSupportedCurrencyCode(currencyCodeHint) ? currencyCodeHint.toUpperCase() : detectBalanceCurrencyCode(value);
+
+  if (parsed === null) {
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : "$0.00";
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: resolvedCurrencyCode,
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  }).format(parsed);
+}
+
 function clampRatio(ratio) {
   const safeRatio = Number.isFinite(ratio) ? ratio : 0;
   return Math.max(Math.min(safeRatio, 1), 0);
@@ -1344,6 +1435,10 @@ function resolveQuotaWindowLabel(account, slot, windowView) {
     return explicitLabel;
   }
 
+  if (normalizedAccountAuthMethod(account?.authMethod) === "api") {
+    return "API balance";
+  }
+
   return "Quota";
 }
 
@@ -1761,7 +1856,75 @@ function updateMetricWindowLabels(primaryMetric, secondaryMetric) {
   }
 }
 
+function buildDashboardApiBalanceMetrics(accounts) {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return null;
+  }
+
+  const apiAccounts = accounts.filter((account) => normalizedAccountAuthMethod(account?.authMethod) === "api");
+  if (apiAccounts.length === 0 || apiAccounts.length !== accounts.length) {
+    return null;
+  }
+
+  const balances = apiAccounts
+    .map((account) => {
+      const raw = typeof account?.creditsBalance === "string" ? account.creditsBalance.trim() : "";
+      if (raw.length === 0) {
+        return null;
+      }
+
+      return {
+        raw,
+        parsed: parseBalanceNumber(raw),
+        currencyCode: detectBalanceCurrencyCode(raw),
+      };
+    })
+    .filter((entry) => entry !== null);
+
+  if (balances.length === 0) {
+    return null;
+  }
+
+  const allNumeric = balances.every((entry) => entry.parsed !== null);
+  const uniqueCurrencyCodes = [...new Set(balances.map((entry) => entry.currencyCode))];
+  const totalBalance = allNumeric
+    ? uniqueCurrencyCodes.length === 1
+      ? balances.reduce((sum, entry) => sum + (entry.parsed ?? 0), 0)
+      : null
+    : null;
+  const apiAccountSuffix = apiAccounts.length === 1 ? "" : "s";
+  const displayCurrencyCode = uniqueCurrencyCodes[0] ?? "USD";
+
+  return {
+    primaryLabel: "Total API Balance",
+    primaryValue:
+      totalBalance !== null
+        ? formatBalanceValue(totalBalance, displayCurrencyCode)
+        : formatBalanceValue(balances[0]?.raw ?? "", balances[0]?.currencyCode ?? "USD"),
+    primaryDetail:
+      totalBalance !== null
+        ? `Across ${formatNumber(apiAccounts.length)} API account${apiAccountSuffix}`
+        : uniqueCurrencyCodes.length > 1
+          ? `Across ${formatNumber(balances.length)} API accounts (mixed currencies)`
+          : `Across ${formatNumber(balances.length)} API account${apiAccountSuffix}`,
+    secondaryLabel: "API Accounts",
+    secondaryValue: formatNumber(apiAccounts.length),
+    secondaryDetail: `${formatNumber(balances.length)} with live balance`,
+  };
+}
+
 function renderDashboardQuotaMetrics(accounts) {
+  const apiBalanceMetrics = buildDashboardApiBalanceMetrics(accounts);
+  if (apiBalanceMetrics) {
+    updateMetricText("#metric-window-a-label", apiBalanceMetrics.primaryLabel);
+    updateMetricText("#metric-five-hour", apiBalanceMetrics.primaryValue);
+    updateMetricText("#metric-five-hour-detail", apiBalanceMetrics.primaryDetail);
+    updateMetricText("#metric-window-b-label", apiBalanceMetrics.secondaryLabel);
+    updateMetricText("#metric-weekly", apiBalanceMetrics.secondaryValue);
+    updateMetricText("#metric-weekly-detail", apiBalanceMetrics.secondaryDetail);
+    return;
+  }
+
   const metrics = buildDashboardWindowMetrics(accounts);
   const primaryMetric = metrics[0] ?? null;
   const secondaryMetric = metrics[1] ?? null;
@@ -1869,6 +2032,28 @@ function renderQuotaWindowBlock(windowView) {
   `;
 }
 
+function renderApiBalanceBlock(account) {
+  if (normalizedAccountAuthMethod(account?.authMethod) !== "api") {
+    return "";
+  }
+
+  const rawBalance = typeof account?.creditsBalance === "string" ? account.creditsBalance.trim() : "";
+  if (rawBalance.length === 0) {
+    return "";
+  }
+
+  const currencyCode = detectBalanceCurrencyCode(rawBalance);
+
+  return `
+    <div class="quota-clean-block">
+      <div class="quota-clean-head">
+        <span class="quota-mini-label">API balance</span>
+        <span class="quota-mini-value">${escapeHtml(formatBalanceValue(rawBalance, currencyCode))}</span>
+      </div>
+    </div>
+  `;
+}
+
 function normalizeQuotaSyncIssue(rawIssue) {
   if (!rawIssue || typeof rawIssue !== "object" || Array.isArray(rawIssue)) {
     return null;
@@ -1954,14 +2139,14 @@ function renderAccountsLoadError(message) {
   const details =
     typeof message === "string" && message.trim().length > 0
       ? message.trim()
-      : "Unable to load accounts.";
+      : "Unable to load connections.";
 
   accountsListElement.classList.add("is-empty");
   accountsListElement.classList.remove("single-account");
   accountsListElement.innerHTML = `
     <div class="empty-state">
       <i data-lucide="alert-triangle"></i>
-      <p>Unable to load accounts.</p>
+      <p>Unable to load connections.</p>
       <p>${escapeHtml(details)}</p>
     </div>
   `;
@@ -1979,8 +2164,8 @@ function renderAccounts(accounts) {
     accountsListElement.innerHTML = `
       <div class="empty-state">
         <i data-lucide="inbox"></i>
-        <p>No accounts connected.</p>
-        <p>Connect an account from the side panel to start routing.</p>
+        <p>No connections yet.</p>
+        <p>Connect a provider from the side panel to start routing.</p>
       </div>
     `;
     reRenderIcons();
@@ -2009,8 +2194,17 @@ function renderAccounts(accounts) {
         estimateNote && estimateNote.trim().length > 0
           ? `<div class="account-note-msg">${escapeHtml(estimateNote)}</div>`
           : "";
-      const quotaBlocks = quotaWindows.map((windowView) => renderQuotaWindowBlock(windowView)).join("");
-      const quotaGridClass = quotaWindows.length === 1 ? "account-quotas-clean single-window" : "account-quotas-clean";
+      const apiBalanceBlock = renderApiBalanceBlock(account);
+      const quotaBlocks =
+        apiBalanceBlock.length > 0
+          ? apiBalanceBlock
+          : quotaWindows.map((windowView) => renderQuotaWindowBlock(windowView)).join("");
+      const quotaGridClass =
+        apiBalanceBlock.length > 0
+          ? "account-quotas-clean single-window"
+          : quotaWindows.length === 1
+            ? "account-quotas-clean single-window"
+            : "account-quotas-clean";
 
       return `
       <article class="account-card">
@@ -2138,11 +2332,37 @@ function composeProviderModelId(providerId, modelId) {
     return normalizedModelId;
   }
 
+  const separatorIndex = normalizedModelId.indexOf("/");
+  if (separatorIndex > 0) {
+    const prefix = normalizedModelId.slice(0, separatorIndex).toLowerCase();
+    if (KNOWN_PROVIDER_IDS.includes(prefix)) {
+      return normalizedModelId;
+    }
+  }
+
   if (normalizedModelId.toLowerCase().startsWith(`${providerPrefix}/`)) {
     return normalizedModelId;
   }
 
   return `${providerPrefix}/${normalizedModelId}`;
+}
+
+function matchesSidebarModelSearch(modelId, normalizedSearchQuery) {
+  if (typeof normalizedSearchQuery !== "string" || normalizedSearchQuery.length === 0) {
+    return true;
+  }
+
+  const tokens = normalizedSearchQuery
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (tokens.length === 0) {
+    return true;
+  }
+
+  const haystack = String(modelId ?? "").toLowerCase();
+  return tokens.every((token) => haystack.includes(token));
 }
 
 function buildSidebarModelEntries(payload, searchQuery) {
@@ -2151,9 +2371,21 @@ function buildSidebarModelEntries(payload, searchQuery) {
   const searchNeedle = normalizedSearchQuery.toLowerCase();
 
   const providersWithModelIds = normalized.providers.map((entry) => {
-    const modelIds = [...new Set(entry.modelIds.map((modelId) => composeProviderModelId(entry.provider, modelId)))]
+    const normalizedModelIds = entry.modelIds
+      .map((modelId) => composeProviderModelId(entry.provider, modelId))
       .filter((modelId) => modelId.length > 0)
-      .sort((left, right) => left.localeCompare(right));
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+    const modelIds = [];
+    const seenModelKeys = new Set();
+    for (const modelId of normalizedModelIds) {
+      const modelKey = modelId.toLowerCase();
+      if (seenModelKeys.has(modelKey)) {
+        continue;
+      }
+
+      seenModelKeys.add(modelKey);
+      modelIds.push(modelId);
+    }
 
     return {
       ...entry,
@@ -2166,7 +2398,7 @@ function buildSidebarModelEntries(payload, searchQuery) {
       ? providersWithModelIds
           .map((entry) => ({
             ...entry,
-            modelIds: entry.modelIds.filter((modelId) => modelId.toLowerCase().includes(searchNeedle)),
+            modelIds: entry.modelIds.filter((modelId) => matchesSidebarModelSearch(modelId, normalizedSearchQuery)),
           }))
           .filter((entry) => entry.modelIds.length > 0)
       : providersWithModelIds;
@@ -2203,7 +2435,7 @@ function renderSidebarModels(payload) {
     .map((entry) => {
       const providerName = providerNameById(entry.provider);
       const statusText = entry.status === "live" ? "live" : "unavailable";
-      const countLabel = entry.accountCount === 1 ? "1 account" : `${entry.accountCount} accounts`;
+      const countLabel = entry.accountCount === 1 ? "1 connection" : `${entry.accountCount} connections`;
       const modelList =
         entry.modelIds.length > 0
           ? `<ul class="sidebar-model-list">${entry.modelIds
@@ -2286,10 +2518,9 @@ function renderDashboard(data) {
 async function loadDashboard() {
   setAccountsListBusy(true);
   try {
-    const modelsPromise = loadConnectedProviderModels();
+    void loadConnectedProviderModels();
     const payload = await request("/api/dashboard");
     renderDashboard(payload);
-    await modelsPromise;
   } catch (error) {
     if (!dashboardLoaded) {
       renderAccountsLoadError(error instanceof Error ? error.message : "Request failed.");
@@ -2443,7 +2674,6 @@ function renderConnectProviderCards() {
 
 function hideApiLinkForm() {
   selectedApiProviderId = null;
-  apiLinkManualLimitsEnabled = false;
   hideConnectWarningTooltip();
 
   if (connectProviderListElement instanceof HTMLElement) {
@@ -2453,40 +2683,6 @@ function hideApiLinkForm() {
   if (apiLinkForm instanceof HTMLFormElement) {
     apiLinkForm.hidden = true;
     apiLinkForm.reset();
-  }
-}
-
-function setApiLinkManualLimitsAvailability(enabled) {
-  apiLinkManualLimitsEnabled = enabled;
-
-  if (apiLinkManualFiveHourLabel instanceof HTMLElement) {
-    apiLinkManualFiveHourLabel.hidden = !enabled;
-  }
-
-  if (apiLinkManualWeeklyLabel instanceof HTMLElement) {
-    apiLinkManualWeeklyLabel.hidden = !enabled;
-  }
-
-  if (apiLinkManualFiveHourInput instanceof HTMLInputElement) {
-    apiLinkManualFiveHourInput.hidden = !enabled;
-    apiLinkManualFiveHourInput.disabled = !enabled;
-    if (!enabled) {
-      apiLinkManualFiveHourInput.value = "";
-    }
-  }
-
-  if (apiLinkManualWeeklyInput instanceof HTMLInputElement) {
-    apiLinkManualWeeklyInput.hidden = !enabled;
-    apiLinkManualWeeklyInput.disabled = !enabled;
-    if (!enabled) {
-      apiLinkManualWeeklyInput.value = "";
-    }
-  }
-
-  if (apiLinkManualNoteElement instanceof HTMLElement) {
-    apiLinkManualNoteElement.textContent = enabled
-      ? "Manual limits are available only as a last resort when live usage sync is unavailable."
-      : "Live usage is configured for this provider. Manual limits are disabled.";
   }
 }
 
@@ -2558,7 +2754,6 @@ function focusConnectModalPrimaryElement() {
 
 function showApiLinkForm(provider) {
   selectedApiProviderId = provider.id;
-  const manualFallbackEnabled = provider.usageConfigured !== true;
 
   if (connectProviderListElement instanceof HTMLElement) {
     connectProviderListElement.hidden = true;
@@ -2586,16 +2781,6 @@ function showApiLinkForm(provider) {
   if (apiLinkKeyInput instanceof HTMLInputElement) {
     apiLinkKeyInput.value = "";
   }
-
-  if (apiLinkManualFiveHourInput instanceof HTMLInputElement) {
-    apiLinkManualFiveHourInput.value = "";
-  }
-
-  if (apiLinkManualWeeklyInput instanceof HTMLInputElement) {
-    apiLinkManualWeeklyInput.value = "";
-  }
-
-  setApiLinkManualLimitsAvailability(manualFallbackEnabled);
 
   if (apiLinkForm instanceof HTMLFormElement) {
     apiLinkForm.hidden = false;
@@ -2737,43 +2922,6 @@ function openAccountSettingsModal(accountId) {
 
   if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
     accountSettingsDisplayNameInput.value = account.displayName;
-  }
-
-  const accountWindows = normalizedAccountQuotaWindows(account);
-  const accountFiveHourLabel =
-    typeof accountWindows[0]?.label === "string" ? accountWindows[0].label.trim() : "";
-  const accountWeeklyLabel =
-    typeof accountWindows[1]?.label === "string" ? accountWindows[1].label.trim() : "";
-  if (accountSettingsFiveHourLabel instanceof HTMLElement) {
-    accountSettingsFiveHourLabel.textContent =
-      accountFiveHourLabel.length > 0 ? `Manual ${accountFiveHourLabel} limit` : "Manual limit";
-  }
-
-  if (accountSettingsWeeklyLabel instanceof HTMLElement) {
-    accountSettingsWeeklyLabel.textContent =
-      accountWeeklyLabel.length > 0 ? `Manual ${accountWeeklyLabel} limit` : "Manual secondary limit";
-  }
-
-  const canSetManualFallbackLimits =
-    (account.authMethod ?? "oauth") === "api" && account.quotaSyncStatus !== "live";
-  if (accountSettingsApiLimitsElement instanceof HTMLElement) {
-    accountSettingsApiLimitsElement.hidden = !canSetManualFallbackLimits;
-  }
-
-  if (accountSettingsFiveHourInput instanceof HTMLInputElement) {
-    const currentLimit = Number(account.quota?.fiveHour?.limit ?? Number.NaN);
-    accountSettingsFiveHourInput.value =
-      canSetManualFallbackLimits && Number.isFinite(currentLimit) && currentLimit > 0
-        ? String(Math.round(currentLimit))
-        : "";
-  }
-
-  if (accountSettingsWeeklyInput instanceof HTMLInputElement) {
-    const currentLimit = Number(account.quota?.weekly?.limit ?? Number.NaN);
-    accountSettingsWeeklyInput.value =
-      canSetManualFallbackLimits && Number.isFinite(currentLimit) && currentLimit > 0
-        ? String(Math.round(currentLimit))
-        : "";
   }
 
   accountSettingsModalElement.hidden = false;
@@ -2939,6 +3087,10 @@ async function copySidebarModelId(fullModelId) {
   if (!modelId) {
     showToast("Model ID unavailable.", true);
     return;
+  }
+
+  if (!navigator?.clipboard || typeof navigator.clipboard.writeText !== "function") {
+    throw new Error("Clipboard is unavailable in this browser.");
   }
 
   await navigator.clipboard.writeText(modelId);
@@ -3191,7 +3343,7 @@ function checkConnectionToast() {
   let shouldRewriteUrl = false;
 
   if (params.get("connected") === "1") {
-    showToast("Account connected successfully.");
+      showToast("Connection added successfully.");
     params.delete("connected");
     shouldRewriteUrl = true;
   }
@@ -3427,7 +3579,7 @@ document.addEventListener("click", async (event) => {
     if (!accountId) return;
 
     if (confirmRemoval) {
-      const confirmed = window.confirm("Remove this connected account?");
+      const confirmed = window.confirm("Remove this connection?");
       if (!confirmed) {
         return;
       }
@@ -3559,23 +3711,6 @@ if (apiLinkForm instanceof HTMLFormElement) {
       return;
     }
 
-    let manualFiveHourLimit;
-    let manualWeeklyLimit;
-
-    if (apiLinkManualLimitsEnabled) {
-      const manualFiveHourLimitValue = Number(data.get("manualFiveHourLimit") ?? "");
-      const manualWeeklyLimitValue = Number(data.get("manualWeeklyLimit") ?? "");
-
-      manualFiveHourLimit =
-        Number.isFinite(manualFiveHourLimitValue) && manualFiveHourLimitValue > 0
-          ? Math.round(manualFiveHourLimitValue)
-          : undefined;
-      manualWeeklyLimit =
-        Number.isFinite(manualWeeklyLimitValue) && manualWeeklyLimitValue > 0
-          ? Math.round(manualWeeklyLimitValue)
-          : undefined;
-    }
-
     try {
       await request("/api/accounts/link-api", {
         method: "POST",
@@ -3584,8 +3719,6 @@ if (apiLinkForm instanceof HTMLFormElement) {
           displayName,
           providerAccountId,
           apiKey,
-          manualFiveHourLimit,
-          manualWeeklyLimit,
         },
       });
 
@@ -3637,25 +3770,6 @@ if (accountSettingsForm instanceof HTMLFormElement) {
     const payload = {
       displayName,
     };
-
-    if ((account.authMethod ?? "oauth") === "api") {
-      const fiveHourValue =
-        accountSettingsFiveHourInput instanceof HTMLInputElement
-          ? Number(accountSettingsFiveHourInput.value)
-          : Number.NaN;
-      const weeklyValue =
-        accountSettingsWeeklyInput instanceof HTMLInputElement
-          ? Number(accountSettingsWeeklyInput.value)
-          : Number.NaN;
-
-      if (Number.isFinite(fiveHourValue) && fiveHourValue > 0) {
-        payload.manualFiveHourLimit = Math.round(fiveHourValue);
-      }
-
-      if (Number.isFinite(weeklyValue) && weeklyValue > 0) {
-        payload.manualWeeklyLimit = Math.round(weeklyValue);
-      }
-    }
 
     try {
       await request(`/api/accounts/${encodeURIComponent(selectedAccountSettingsId)}/settings`, {
