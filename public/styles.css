@@ -225,12 +225,29 @@ body.resizing-sidebar {
 .sidebar-models-header {
   padding: 8px 9px;
   border-bottom: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .sidebar-models-header h2 {
   font-size: 0.73rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.sidebar-models-search {
+  width: 100%;
+  border: 1px solid var(--border-light);
+  background: var(--bg-app);
+  color: var(--text-main);
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.sidebar-models-search::placeholder {
   color: var(--text-dim);
 }
 
@@ -291,13 +308,21 @@ body.resizing-sidebar {
 }
 
 .sidebar-model-id {
-  font-family: var(--font-mono);
-  font-size: 0.71rem;
-  color: var(--text-main);
-  padding: 3px 5px;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  cursor: copy;
   border: 1px solid var(--border-light);
   background: var(--bg-app);
+  color: var(--text-main);
+  padding: 3px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.71rem;
   word-break: break-all;
+}
+
+.sidebar-model-id:hover {
+  background: var(--surface-hover-soft);
 }
 
 .sidebar-model-provider-error {

@@ -24,6 +24,7 @@ const keyAccessNote = document.querySelector("#key-access-note");
 const connectorKeyElement = document.querySelector("#connector-key");
 const accountsListElement = document.querySelector("#accounts-list");
 const sidebarModelsContentElement = document.querySelector("#sidebar-models-content");
+const sidebarModelsSearchInput = document.querySelector("#sidebar-models-search");
 const routingPriorityResultElement = document.querySelector("#routing-priority-result");
 const routingPriorityForm = document.querySelector("#routing-priority-form");
 const routingPreferredProviderInput = document.querySelector("#routing-preferred-provider");
@@ -111,6 +112,7 @@ let connectedProviderModelsPayload = {
   providers: [],
 };
 let connectedProviderModelsError = null;
+let sidebarModelsSearchQuery = "";
 let quotaCadenceConsensusByScope = new Map();
 
 const MIN_SIDEBAR_WIDTH = 220;
@@ -2125,13 +2127,65 @@ function normalizeConnectedProviderModelsPayload(payload) {
   };
 }
 
+function normalizeSidebarModelSearchQuery(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function composeProviderModelId(providerId, modelId) {
+  const providerPrefix = normalizeProviderId(providerId) ?? "";
+  const normalizedModelId = typeof modelId === "string" ? modelId.trim().replace(/^\/+/, "") : "";
+  if (!providerPrefix || !normalizedModelId) {
+    return normalizedModelId;
+  }
+
+  if (normalizedModelId.toLowerCase().startsWith(`${providerPrefix}/`)) {
+    return normalizedModelId;
+  }
+
+  return `${providerPrefix}/${normalizedModelId}`;
+}
+
+function buildSidebarModelEntries(payload, searchQuery) {
+  const normalized = normalizeConnectedProviderModelsPayload(payload);
+  const normalizedSearchQuery = normalizeSidebarModelSearchQuery(searchQuery);
+  const searchNeedle = normalizedSearchQuery.toLowerCase();
+
+  const providersWithModelIds = normalized.providers.map((entry) => {
+    const modelIds = [...new Set(entry.modelIds.map((modelId) => composeProviderModelId(entry.provider, modelId)))]
+      .filter((modelId) => modelId.length > 0)
+      .sort((left, right) => left.localeCompare(right));
+
+    return {
+      ...entry,
+      modelIds,
+    };
+  });
+
+  const visibleProviders =
+    searchNeedle.length > 0
+      ? providersWithModelIds
+          .map((entry) => ({
+            ...entry,
+            modelIds: entry.modelIds.filter((modelId) => modelId.toLowerCase().includes(searchNeedle)),
+          }))
+          .filter((entry) => entry.modelIds.length > 0)
+      : providersWithModelIds;
+
+  return {
+    totalProviders: normalized.providers.length,
+    visibleProviders,
+    normalizedSearchQuery,
+  };
+}
+
 function renderSidebarModels(payload) {
   if (!(sidebarModelsContentElement instanceof HTMLElement)) {
     return;
   }
 
-  const normalized = normalizeConnectedProviderModelsPayload(payload);
-  if (normalized.providers.length === 0) {
+  const modelEntries = buildSidebarModelEntries(payload, sidebarModelsSearchQuery);
+
+  if (modelEntries.totalProviders === 0) {
     const message =
       typeof connectedProviderModelsError === "string" && connectedProviderModelsError.trim().length > 0
         ? `Unable to load model IDs (${escapeHtml(connectedProviderModelsError.trim())}).`
@@ -2140,7 +2194,12 @@ function renderSidebarModels(payload) {
     return;
   }
 
-  const markup = normalized.providers
+  if (modelEntries.visibleProviders.length === 0) {
+    sidebarModelsContentElement.innerHTML = `<p class="sidebar-models-empty">No model IDs match &quot;${escapeHtml(modelEntries.normalizedSearchQuery)}&quot;.</p>`;
+    return;
+  }
+
+  const markup = modelEntries.visibleProviders
     .map((entry) => {
       const providerName = providerNameById(entry.provider);
       const statusText = entry.status === "live" ? "live" : "unavailable";
@@ -2148,7 +2207,10 @@ function renderSidebarModels(payload) {
       const modelList =
         entry.modelIds.length > 0
           ? `<ul class="sidebar-model-list">${entry.modelIds
-              .map((modelId) => `<li class="sidebar-model-id">${escapeHtml(modelId)}</li>`)
+              .map(
+                (modelId) =>
+                  `<li><button class="sidebar-model-id" type="button" data-copy-model-id="${escapeHtml(modelId)}" aria-label="Copy model ID ${escapeHtml(modelId)}" title="Copy ${escapeHtml(modelId)}">${escapeHtml(modelId)}</button></li>`,
+              )
               .join("")}</ul>`
           : '<p class="sidebar-models-empty">No model IDs returned.</p>';
       const errorLine =
@@ -2872,6 +2934,17 @@ async function copyConnectorKey() {
   showToast("Copied to clipboard.");
 }
 
+async function copySidebarModelId(fullModelId) {
+  const modelId = typeof fullModelId === "string" ? fullModelId.trim() : "";
+  if (!modelId) {
+    showToast("Model ID unavailable.", true);
+    return;
+  }
+
+  await navigator.clipboard.writeText(modelId);
+  showToast(`Copied ${modelId}.`);
+}
+
 function defaultRoutingPreferences() {
   return {
     preferredProvider: "auto",
@@ -3386,6 +3459,17 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const copyModelIdButton = targetElement.closest("[data-copy-model-id]");
+  if (copyModelIdButton instanceof HTMLElement) {
+    const fullModelId = copyModelIdButton.dataset.copyModelId;
+    try {
+      await copySidebarModelId(fullModelId);
+    } catch (error) {
+      showToast(error.message || "Failed to copy model ID.", true);
+    }
+    return;
+  }
+
   if (targetElement.closest("#refresh-dashboard")) {
     try {
       await loadDashboard();
@@ -3599,6 +3683,13 @@ if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
   accountSettingsDisplayNameInput.addEventListener("input", () => {
     accountSettingsDisplayNameInput.setCustomValidity("");
     accountSettingsDisplayNameInput.removeAttribute("aria-invalid");
+  });
+}
+
+if (sidebarModelsSearchInput instanceof HTMLInputElement) {
+  sidebarModelsSearchInput.addEventListener("input", () => {
+    sidebarModelsSearchQuery = normalizeSidebarModelSearchQuery(sidebarModelsSearchInput.value);
+    renderSidebarModels(connectedProviderModelsPayload);
   });
 }
 

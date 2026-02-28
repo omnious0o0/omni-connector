@@ -83,7 +83,20 @@ test("dashboard keeps five-hour and weekly remaining independent", () => {
 type AppContext = vm.Context & {
   authoritativeCadenceMinutes: (windowData: unknown, quotaSyncedAt: unknown) => number | null;
   buildCadenceConsensusByScope: (accounts: unknown[]) => Map<string, number>;
+  buildSidebarModelEntries: (
+    payload: unknown,
+    searchQuery: unknown,
+  ) => {
+    totalProviders: number;
+    visibleProviders: Array<{
+      provider: string;
+      modelIds: string[];
+    }>;
+    normalizedSearchQuery: string;
+  };
   buildQuotaWindowView: (windowData: unknown, quotaSyncedAt: unknown) => Record<string, unknown>;
+  composeProviderModelId: (providerId: unknown, modelId: unknown) => string;
+  normalizeSidebarModelSearchQuery: (value: unknown) => string;
   normalizedAccountQuotaWindows: (account: unknown) => unknown[];
   resolveQuotaWindowLabel: (account: unknown, slot: string, windowView: unknown) => string;
   quotaWindowSignature: (windowView: unknown) => string;
@@ -331,4 +344,71 @@ test("frontend normalized windows render one or two fields based on unique windo
   assert.equal(Array.isArray(distinct), true);
   assert.equal(deduped.length, 1);
   assert.equal(distinct.length, 2);
+});
+
+test("frontend sidebar model helpers normalize IDs and queries", () => {
+  const context = loadFrontendAppContext();
+
+  assert.equal(context.normalizeSidebarModelSearchQuery("  gemini  "), "gemini");
+  assert.equal(context.normalizeSidebarModelSearchQuery(null), "");
+
+  assert.equal(context.composeProviderModelId("gemini", "gemini-2.5-pro"), "gemini/gemini-2.5-pro");
+  assert.equal(context.composeProviderModelId("gemini", " gemini/gemini-2.5-pro "), "gemini/gemini-2.5-pro");
+  assert.equal(context.composeProviderModelId("gemini", "/gemini-2.5-pro"), "gemini/gemini-2.5-pro");
+  assert.equal(context.composeProviderModelId("unknown", "custom-model"), "custom-model");
+});
+
+test("frontend sidebar model builder dedupes, prefixes, sorts, and filters", () => {
+  const context = loadFrontendAppContext();
+
+  const payload = {
+    providers: [
+      {
+        provider: "gemini",
+        accountCount: 1,
+        status: "live",
+        modelIds: [
+          " gemini-2.5-pro ",
+          "gemini/gemini-2.0-flash",
+          "/gemini-2.5-pro",
+          "",
+          "gemini-1.5-pro",
+        ],
+        syncError: null,
+      },
+      {
+        provider: "unsupported-provider",
+        accountCount: 1,
+        status: "live",
+        modelIds: ["ignore-me"],
+        syncError: null,
+      },
+    ],
+  };
+
+  const allEntries = JSON.parse(
+    JSON.stringify(context.buildSidebarModelEntries(payload, "")),
+  ) as ReturnType<AppContext["buildSidebarModelEntries"]>;
+
+  assert.equal(allEntries.totalProviders, 1);
+  assert.equal(allEntries.visibleProviders.length, 1);
+  assert.deepEqual(allEntries.visibleProviders[0]?.modelIds, [
+    "gemini/gemini-1.5-pro",
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-pro",
+  ]);
+
+  const filteredEntries = JSON.parse(
+    JSON.stringify(context.buildSidebarModelEntries(payload, " 2.0 ")),
+  ) as ReturnType<AppContext["buildSidebarModelEntries"]>;
+
+  assert.equal(filteredEntries.normalizedSearchQuery, "2.0");
+  assert.equal(filteredEntries.visibleProviders.length, 1);
+  assert.deepEqual(filteredEntries.visibleProviders[0]?.modelIds, ["gemini/gemini-2.0-flash"]);
+
+  const noMatchEntries = JSON.parse(
+    JSON.stringify(context.buildSidebarModelEntries(payload, "claude-sonnet")),
+  ) as ReturnType<AppContext["buildSidebarModelEntries"]>;
+
+  assert.equal(noMatchEntries.visibleProviders.length, 0);
 });
