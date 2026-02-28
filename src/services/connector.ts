@@ -1,3 +1,4 @@
+import { effectiveAccountAuthMethod } from "../account-auth";
 import { HttpError } from "../errors";
 import {
   AccountSettingsUpdatePayload,
@@ -226,7 +227,7 @@ function quotaSyncIssueFromError(error: unknown): QuotaSyncIssue | null {
 }
 
 function isLegacyGeminiPlaceholderQuota(account: ConnectedAccount): boolean {
-  if (account.provider !== "gemini" || (account.authMethod ?? "oauth") !== "oauth") {
+  if (account.provider !== "gemini" || effectiveAccountAuthMethod(account) !== "oauth") {
     return false;
   }
 
@@ -359,6 +360,7 @@ export class ConnectorService {
 
   public linkApiAccount(payload: ApiLinkedAccountPayload): void {
     this.accounts.upsertApiAccount(payload, this.strictLiveQuota);
+    void this.syncAccountStateNow();
   }
 
   public quotaSyncIssueForAccount(accountId: string): QuotaSyncIssue | null {
@@ -533,7 +535,7 @@ export class ConnectorService {
       decision = {
         routedTo: {
           provider: selected.provider,
-          authMethod: selected.authMethod ?? "oauth",
+          authMethod: effectiveAccountAuthMethod(selected),
           displayName: selected.displayName,
         },
         unitsConsumed: safeUnits,
@@ -624,7 +626,7 @@ export class ConnectorService {
       }
 
       const useCodexOAuthLiveSync =
-        target.provider === "codex" && (target.authMethod ?? "oauth") === "oauth";
+        target.provider === "codex" && effectiveAccountAuthMethod(target) === "oauth";
 
       if (!useCodexOAuthLiveSync && !this.providerUsageService.isAccountConfigured(target)) {
         const nowIso = new Date().toISOString();
@@ -663,8 +665,14 @@ export class ConnectorService {
             return;
           }
 
+          const inferredAuthMethod = effectiveAccountAuthMethod(account);
+          const missingUsageConfigError =
+            inferredAuthMethod === "api"
+              ? `Live usage data is currently unavailable for ${account.provider.toUpperCase()} API keys. Omni Connector keeps syncing automatically in the background.`
+              : null;
+
           account.quotaSyncStatus = this.strictLiveQuota ? "unavailable" : "stale";
-          account.quotaSyncError = null;
+          account.quotaSyncError = missingUsageConfigError;
           account.quotaSyncIssue = null;
           account.quotaSyncedAt = nowIso;
           account.updatedAt = nowIso;
@@ -818,7 +826,7 @@ export class ConnectorService {
 
     this.tokenRefreshInFlight = (async () => {
       for (const target of accounts) {
-        if ((target.authMethod ?? "oauth") !== "oauth" || !target.refreshToken) {
+        if (effectiveAccountAuthMethod(target) !== "oauth" || !target.refreshToken) {
           continue;
         }
 

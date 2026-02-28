@@ -1,3 +1,4 @@
+import { effectiveAccountAuthMethod } from "../account-auth";
 import { ConnectedAccount, DashboardAccount, QuotaWindowState } from "../types";
 
 const FIVE_HOUR_WINDOW_MS = 5 * 60 * 60 * 1000;
@@ -101,7 +102,7 @@ export function toDashboardAccount(account: ConnectedAccount): DashboardAccount 
   return {
     id: account.id,
     provider: account.provider,
-    authMethod: account.authMethod ?? "oauth",
+    authMethod: effectiveAccountAuthMethod(account),
     oauthProfileId: account.oauthProfileId,
     providerAccountId: account.providerAccountId,
     chatgptAccountId: account.chatgptAccountId ?? null,

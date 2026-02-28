@@ -153,8 +153,6 @@ function parseApiLinkBody(rawBody: unknown): {
   apiKey: string;
   displayName: string;
   providerAccountId: string;
-  manualFiveHourLimit?: number;
-  manualWeeklyLimit?: number;
 } {
   const body = (rawBody && typeof rawBody === "object" ? rawBody : {}) as {
     provider?: unknown;
@@ -165,6 +163,8 @@ function parseApiLinkBody(rawBody: unknown): {
     manualWeeklyLimit?: unknown;
   };
 
+  assertNoManualQuotaFields(body);
+
   const provider = parseProviderId(body.provider);
   const providerConfig = PROVIDER_CATALOG.find((item) => item.id === provider);
   if (!providerConfig || !providerConfig.methods.includes("api")) {
@@ -174,16 +174,6 @@ function parseApiLinkBody(rawBody: unknown): {
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   const displayName = typeof body.displayName === "string" ? body.displayName : "";
   const providerAccountId = typeof body.providerAccountId === "string" ? body.providerAccountId : "";
-  const parsedManualFiveHourLimit = Number(body.manualFiveHourLimit);
-  const parsedManualWeeklyLimit = Number(body.manualWeeklyLimit);
-  const manualFiveHourLimit =
-    Number.isFinite(parsedManualFiveHourLimit) && parsedManualFiveHourLimit > 0
-      ? Math.round(parsedManualFiveHourLimit)
-      : undefined;
-  const manualWeeklyLimit =
-    Number.isFinite(parsedManualWeeklyLimit) && parsedManualWeeklyLimit > 0
-      ? Math.round(parsedManualWeeklyLimit)
-      : undefined;
 
   if (!apiKey) {
     throw new HttpError(400, "missing_api_key", "API key is required.");
@@ -194,22 +184,32 @@ function parseApiLinkBody(rawBody: unknown): {
     apiKey,
     displayName,
     providerAccountId,
-    manualFiveHourLimit,
-    manualWeeklyLimit,
   };
 }
 
-function parseOptionalLimit(rawValue: unknown, fieldName: string): number | undefined {
-  if (rawValue === undefined || rawValue === null || rawValue === "") {
-    return undefined;
+function hasProvidedManualQuotaValue(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return false;
   }
 
-  const numericValue = Number(rawValue);
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    throw new HttpError(400, "invalid_account_settings", `${fieldName} must be a positive number.`);
+  if (typeof value === "string") {
+    return value.trim().length > 0;
   }
 
-  return Math.round(numericValue);
+  return true;
+}
+
+function assertNoManualQuotaFields(body: { manualFiveHourLimit?: unknown; manualWeeklyLimit?: unknown }): void {
+  if (
+    hasProvidedManualQuotaValue(body.manualFiveHourLimit) ||
+    hasProvidedManualQuotaValue(body.manualWeeklyLimit)
+  ) {
+    throw new HttpError(
+      400,
+      "manual_quota_removed",
+      "Manual quota limits are no longer supported. Quota sync is automatic.",
+    );
+  }
 }
 
 function parseAccountSettingsBody(rawBody: unknown): AccountSettingsUpdatePayload {
@@ -218,6 +218,8 @@ function parseAccountSettingsBody(rawBody: unknown): AccountSettingsUpdatePayloa
     manualFiveHourLimit?: unknown;
     manualWeeklyLimit?: unknown;
   };
+
+  assertNoManualQuotaFields(body);
 
   const displayName =
     body.displayName === undefined
@@ -229,17 +231,12 @@ function parseAccountSettingsBody(rawBody: unknown): AccountSettingsUpdatePayloa
     throw new HttpError(400, "invalid_account_settings", "Display name must be a string.");
   }
 
-  const manualFiveHourLimit = parseOptionalLimit(body.manualFiveHourLimit, "Manual 5h limit");
-  const manualWeeklyLimit = parseOptionalLimit(body.manualWeeklyLimit, "Manual weekly limit");
-
-  if (displayName === undefined && manualFiveHourLimit === undefined && manualWeeklyLimit === undefined) {
-    throw new HttpError(400, "invalid_account_settings", "At least one account setting must be provided.");
+  if (displayName === undefined) {
+    throw new HttpError(400, "invalid_account_settings", "Display name must be provided.");
   }
 
   return {
     displayName,
-    manualFiveHourLimit,
-    manualWeeklyLimit,
   };
 }
 
@@ -376,18 +373,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
     assertDashboardClientRequest(req, dependencies.allowRemoteDashboard);
     const payload = parseApiLinkBody(req.body);
 
-    const requestedManualLimitFallback =
-      payload.manualFiveHourLimit !== undefined || payload.manualWeeklyLimit !== undefined;
-    if (requestedManualLimitFallback && dependencies.providerUsageService.isConfigured(payload.provider)) {
-      throw new HttpError(
-        409,
-        "manual_limits_not_allowed",
-        "Manual limits can only be set when live usage sync is unavailable.",
-      );
-    }
-
     dependencies.connectorService.linkApiAccount(payload);
-    await dependencies.connectorService.syncAccountStateNow();
     res.status(201).json({
       ok: true,
     });

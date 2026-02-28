@@ -120,14 +120,10 @@ export interface ApiLinkedAccountPayload {
   providerAccountId: string;
   displayName: string;
   apiKey: string;
-  manualFiveHourLimit?: number;
-  manualWeeklyLimit?: number;
 }
 
 export interface AccountSettingsUpdatePayload {
   displayName?: string;
-  manualFiveHourLimit?: number;
-  manualWeeklyLimit?: number;
 }
 
 export interface DashboardQuotaWindow {

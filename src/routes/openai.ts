@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { Response as ExpressResponse, Router } from "express";
+import { effectiveAccountAuthMethod } from "../account-auth";
 import { HttpError } from "../errors";
 import { resilientFetch } from "../services/http-resilience";
 import { ConnectedAccount, ProviderId } from "../types";
@@ -838,7 +839,7 @@ async function executeChatCompletionForCandidate(
     return mapClaudeResponseToOpenAi(result.payload, claudeBody.model as string);
   }
 
-  const isCodexOAuth = candidate.provider === "codex" && (candidate.authMethod ?? "oauth") === "oauth";
+  const isCodexOAuth = candidate.provider === "codex" && effectiveAccountAuthMethod(candidate) === "oauth";
   if (isCodexOAuth) {
     const codexModel = resolveCodexResponsesModel(requestedModel);
     const codexBody = buildCodexResponsesBody(requestedModel, messages);

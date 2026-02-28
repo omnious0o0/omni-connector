@@ -1,3 +1,4 @@
+import { effectiveAccountAuthMethod } from "../account-auth";
 import { AppConfig } from "../config";
 import {
   ConnectedAccount,
@@ -230,7 +231,7 @@ export class ProviderModelsService {
   }
 
   private async fetchCodexModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
-    const authMethod = account.authMethod ?? "oauth";
+    const authMethod = effectiveAccountAuthMethod(account);
     if (authMethod === "oauth") {
       return await this.fetchCodexOauthModels(account, accessToken);
     }
@@ -346,7 +347,7 @@ export class ProviderModelsService {
   }
 
   private async fetchGeminiModels(account: ConnectedAccount, accessToken: string): Promise<string[]> {
-    const authMethod = account.authMethod ?? "oauth";
+    const authMethod = effectiveAccountAuthMethod(account);
     const modelIds = new Set<string>();
     let codeAssistError: Error | null = null;
 
@@ -451,7 +452,7 @@ export class ProviderModelsService {
       "anthropic-version": this.config.providerUsage.claude.headers["anthropic-version"] ?? "2023-06-01",
     };
 
-    if ((account.authMethod ?? "oauth") === "api") {
+    if (effectiveAccountAuthMethod(account) === "api") {
       headers["x-api-key"] = accessToken;
     } else {
       headers.Authorization = `Bearer ${accessToken}`;

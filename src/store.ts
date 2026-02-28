@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { effectiveAccountAuthMethod } from "./account-auth";
 import { PersistedData, ProviderId, RoutingPreferences, createDefaultRoutingPreferences } from "./types";
 
 const SECRET_PREFIX = "enc:v1:";
@@ -227,8 +228,16 @@ export class DataStore {
     const clone = structuredClone(data);
     const currentPreferences = (clone.connector as { routingPreferences?: unknown }).routingPreferences;
     const nextPreferences = sanitizeRoutingPreferences(currentPreferences);
-    const migrated = JSON.stringify(currentPreferences ?? null) !== JSON.stringify(nextPreferences);
+    let migrated = JSON.stringify(currentPreferences ?? null) !== JSON.stringify(nextPreferences);
     clone.connector.routingPreferences = nextPreferences;
+
+    for (const account of clone.accounts) {
+      const normalizedAuthMethod = effectiveAccountAuthMethod(account);
+      if (account.authMethod !== normalizedAuthMethod) {
+        account.authMethod = normalizedAuthMethod;
+        migrated = true;
+      }
+    }
 
     return {
       value: clone,

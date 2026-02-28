@@ -1,3 +1,4 @@
+import { effectiveAccountAuthMethod } from "../account-auth";
 import { AppConfig, ProviderUsageConfig, isLoopbackHost } from "../config";
 import { HttpError } from "../errors";
 import { ConnectedAccount, ProviderId, QuotaSyncIssue, QuotaWindowMode } from "../types";
@@ -32,6 +33,26 @@ interface ParsedWindowTotals {
   limit: number;
   mode: QuotaWindowMode;
 }
+
+interface ProviderMetadata {
+  planType: string | null;
+  creditsBalance: string | null;
+}
+
+const PLAN_TYPE_KEYS = new Set(["plan", "plan_type", "tier", "service_tier"]);
+const CREDIT_BALANCE_KEYS = new Set([
+  "credits_balance",
+  "balance",
+  "remaining_credits",
+  "credits_remaining",
+  "remaining_balance",
+]);
+const CREDIT_TOTAL_KEYS = new Set(["total_credits", "credits_total", "credit_limit", "credits_limit"]);
+const CREDIT_USED_KEYS = new Set(["total_usage", "credits_used", "spent", "total_spent"]);
+const JSON_TOTALS_FIELD_HINT =
+  "expected usage fields like used/usage + limit/quota, or remaining_credits with configured limits";
+const JSON_TOTALS_METADATA_ONLY_SYNC_MESSAGE =
+  "Live balance synced, but provider responses did not include quota window fields.";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -680,11 +701,93 @@ function parseJsonTotals(payload: unknown, fallbackLimit: number): ParsedWindowT
   };
 }
 
+function extractProviderMetadata(payload: unknown): ProviderMetadata {
+  const planType = deepFindFirstString(payload, PLAN_TYPE_KEYS);
+  const explicitBalance = deepFindFirstString(payload, CREDIT_BALANCE_KEYS);
+  if (explicitBalance !== null) {
+    return {
+      planType,
+      creditsBalance: explicitBalance,
+    };
+  }
+
+  const totalCredits = deepFindFirstNumber(payload, CREDIT_TOTAL_KEYS);
+  if (totalCredits === null) {
+    return {
+      planType,
+      creditsBalance: null,
+    };
+  }
+
+  const totalUsage = deepFindFirstNumber(payload, CREDIT_USED_KEYS);
+  const remaining = totalUsage === null ? totalCredits : Math.max(totalCredits - totalUsage, 0);
+  return {
+    planType,
+    creditsBalance: remaining.toFixed(2),
+  };
+}
+
+function combineProviderMetadata(payloads: Array<unknown | null>): ProviderMetadata {
+  let planType: string | null = null;
+  let creditsBalance: string | null = null;
+
+  for (const payload of payloads) {
+    if (payload === null) {
+      continue;
+    }
+
+    const metadata = extractProviderMetadata(payload);
+    if (planType === null && metadata.planType !== null) {
+      planType = metadata.planType;
+    }
+    if (creditsBalance === null && metadata.creditsBalance !== null) {
+      creditsBalance = metadata.creditsBalance;
+    }
+
+    if (planType !== null && creditsBalance !== null) {
+      break;
+    }
+  }
+
+  return {
+    planType,
+    creditsBalance,
+  };
+}
+
+function usageEndpointAuthMismatchHint(
+  status: number,
+  detail: string | null,
+  providerConfig: ProviderUsageConfig,
+): string | null {
+  if (status !== 401 && status !== 403) {
+    return null;
+  }
+
+  const usingApiKeyMode = providerConfig.authMode === "query-api-key" || providerConfig.authMode === "x-api-key";
+  if (!usingApiKeyMode) {
+    return null;
+  }
+
+  const normalizedDetail = (detail ?? "").trim().toLowerCase();
+  const indicatesOauthOnly =
+    normalizedDetail.includes("api keys are not supported") ||
+    normalizedDetail.includes("expected oauth") ||
+    normalizedDetail.includes("oauth2 access token") ||
+    normalizedDetail.includes("credentials_missing");
+
+  if (!indicatesOauthOnly) {
+    return null;
+  }
+
+  return "Configured usage endpoint requires OAuth credentials. Use an API-key-compatible usage endpoint or connect this account with OAuth.";
+}
+
 export class ProviderUsageService {
   public constructor(private readonly config: AppConfig) {}
 
   private isGeminiOauthAccount(account: ConnectedAccount): boolean {
-    return account.provider === "gemini" && (account.authMethod ?? "oauth") === "oauth";
+    return account.provider === "gemini" && effectiveAccountAuthMethod(account) === "oauth";
   }
 
   private geminiCodeAssistQuotaEndpoint(): string {
@@ -1061,7 +1164,7 @@ export class ProviderUsageService {
         return false;
       }
 
-      const authMethod = account.authMethod ?? "oauth";
+      const authMethod = effectiveAccountAuthMethod(account);
       const isCodexOAuth = account.provider === "codex" && authMethod === "oauth";
       if (!isCodexOAuth && !this.hasConfiguredWindowLimits(providerConfig)) {
         return false;
@@ -1087,7 +1190,8 @@ export class ProviderUsageService {
         return true;
       }
 
-      return (account.authMethod ?? "oauth") === "api" || (account.authMethod ?? "oauth") === "oauth";
+      const authMethod = effectiveAccountAuthMethod(account);
+      return authMethod === "api" || authMethod === "oauth";
     }
 
     return providerConfig.fiveHourUrl !== null || providerConfig.weeklyUrl !== null;
@@ -1182,16 +1286,31 @@ export class ProviderUsageService {
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
           })();
 
-    if (errors.length >= 2) {
-      throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
-    }
+    const metadata = combineProviderMetadata([
+      fiveHourResult.status === "fulfilled" ? fiveHourResult.value : null,
+      weeklyResult.status === "fulfilled" ? weeklyResult.value : null,
+    ]);
 
-    const metadataPayload =
-      fiveHourResult.status === "fulfilled"
-        ? fiveHourResult.value
-        : weeklyResult.status === "fulfilled"
-          ? weeklyResult.value
-          : null;
+    if (errors.length >= 2) {
+      const hasBalanceMetadata = metadata.planType !== null || metadata.creditsBalance !== null;
+      if (!hasBalanceMetadata) {
+        throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
+      }
+
+      return {
+        fiveHour: {
+          ...fiveHourWindow,
+        },
+        weekly: {
+          ...weeklyWindow,
+        },
+        planType: metadata.planType,
+        creditsBalance: metadata.creditsBalance,
+        syncedAt,
+        partial: true,
+        syncError: JSON_TOTALS_METADATA_ONLY_SYNC_MESSAGE,
+      };
+    }
 
     return {
       fiveHour: {
@@ -1200,33 +1319,8 @@ export class ProviderUsageService {
       weekly: {
         ...weeklyWindow,
       },
-      planType: metadataPayload
-        ? deepFindFirstString(metadataPayload, new Set(["plan", "plan_type", "tier"]))
-        : null,
-      creditsBalance:
-        (metadataPayload
-          ? deepFindFirstString(metadataPayload, new Set(["credits_balance", "balance"]))
-          : null) ??
-        (() => {
-          if (!metadataPayload) {
-            return null;
-          }
-
-          const totalCredits = deepFindFirstNumber(
-            metadataPayload,
-            new Set(["total_credits", "credits_total", "credit_limit"]),
-          );
-          const totalUsage = deepFindFirstNumber(
-            metadataPayload,
-            new Set(["total_usage", "credits_used", "spent"]),
-          );
-          if (totalCredits === null) {
-            return null;
-          }
-
-          const remaining = totalUsage === null ? totalCredits : Math.max(totalCredits - totalUsage, 0);
-          return remaining.toFixed(2);
-        })(),
+      planType: metadata.planType,
+      creditsBalance: metadata.creditsBalance,
       syncedAt,
       partial: errors.length > 0,
       syncError: errors.length > 0 ? errors.join(" ") : null,
@@ -1297,16 +1391,31 @@ export class ProviderUsageService {
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
           })();
 
-    if (errors.length >= 2) {
-      throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
-    }
+    const metadata = combineProviderMetadata([
+      fiveHourResult.status === "fulfilled" ? fiveHourResult.value : null,
+      weeklyResult.status === "fulfilled" ? weeklyResult.value : null,
+    ]);
 
-    const metadataPayload =
-      fiveHourResult.status === "fulfilled"
-        ? fiveHourResult.value
-        : weeklyResult.status === "fulfilled"
-          ? weeklyResult.value
-          : null;
+    if (errors.length >= 2) {
+      const hasBalanceMetadata = metadata.planType !== null || metadata.creditsBalance !== null;
+      if (!hasBalanceMetadata) {
+        throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
+      }
+
+      return {
+        fiveHour: {
+          ...fiveHourWindow,
+        },
+        weekly: {
+          ...weeklyWindow,
+        },
+        planType: metadata.planType,
+        creditsBalance: metadata.creditsBalance,
+        syncedAt,
+        partial: true,
+        syncError: JSON_TOTALS_METADATA_ONLY_SYNC_MESSAGE,
+      };
+    }
 
     return {
       fiveHour: {
@@ -1315,12 +1424,8 @@ export class ProviderUsageService {
       weekly: {
         ...weeklyWindow,
       },
-      planType: metadataPayload
-        ? deepFindFirstString(metadataPayload, new Set(["service_tier", "plan", "plan_type"]))
-        : null,
-      creditsBalance: metadataPayload
-        ? deepFindFirstString(metadataPayload, new Set(["credits_balance", "balance"]))
-        : null,
+      planType: metadata.planType,
+      creditsBalance: metadata.creditsBalance,
       syncedAt,
       partial: errors.length > 0,
       syncError: errors.length > 0 ? errors.join(" ") : null,
@@ -1370,7 +1475,7 @@ export class ProviderUsageService {
             const reason =
               fiveHourResult.status === "rejected"
                 ? errorMessage(fiveHourResult.reason, "request failed")
-                : "response had no usable quota fields";
+                : `response had no usable quota fields (${JSON_TOTALS_FIELD_HINT})`;
             errors.push(`5h usage fetch failed (${reason}).`);
             return fallbackWindowFromAccount(account, "fiveHour", normalizeLimit(providerConfig.fiveHourLimit));
           })();
@@ -1390,21 +1495,36 @@ export class ProviderUsageService {
             const reason =
               weeklyResult.status === "rejected"
                 ? errorMessage(weeklyResult.reason, "request failed")
-                : "response had no usable quota fields";
+                : `response had no usable quota fields (${JSON_TOTALS_FIELD_HINT})`;
             errors.push(`7d usage fetch failed (${reason}).`);
             return fallbackWindowFromAccount(account, "weekly", normalizeLimit(providerConfig.weeklyLimit));
           })();
 
-    if (errors.length >= 2) {
-      throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
-    }
+    const metadata = combineProviderMetadata([
+      fiveHourResult.status === "fulfilled" ? fiveHourResult.value : null,
+      weeklyResult.status === "fulfilled" ? weeklyResult.value : null,
+    ]);
 
-    const metadataPayload =
-      fiveHourResult.status === "fulfilled"
-        ? fiveHourResult.value
-        : weeklyResult.status === "fulfilled"
-          ? weeklyResult.value
-          : null;
+    if (errors.length >= 2) {
+      const hasBalanceMetadata = metadata.planType !== null || metadata.creditsBalance !== null;
+      if (!hasBalanceMetadata) {
+        throw new HttpError(502, "provider_usage_fetch_failed", errors.join(" "));
+      }
+
+      return {
+        fiveHour: {
+          ...fiveHourWindow,
+        },
+        weekly: {
+          ...weeklyWindow,
+        },
+        planType: metadata.planType,
+        creditsBalance: metadata.creditsBalance,
+        syncedAt,
+        partial: true,
+        syncError: JSON_TOTALS_METADATA_ONLY_SYNC_MESSAGE,
+      };
+    }
 
     return {
       fiveHour: {
@@ -1413,33 +1533,8 @@ export class ProviderUsageService {
       weekly: {
         ...weeklyWindow,
       },
-      planType: metadataPayload
-        ? deepFindFirstString(metadataPayload, new Set(["plan", "plan_type", "tier", "service_tier"]))
-        : null,
-      creditsBalance:
-        (metadataPayload
-          ? deepFindFirstString(metadataPayload, new Set(["credits_balance", "balance", "remaining_credits"]))
-          : null) ??
-        (() => {
-          if (!metadataPayload) {
-            return null;
-          }
-
-          const totalCredits = deepFindFirstNumber(
-            metadataPayload,
-            new Set(["total_credits", "credits_total", "credit_limit"]),
-          );
-          const totalUsage = deepFindFirstNumber(
-            metadataPayload,
-            new Set(["total_usage", "credits_used", "spent"]),
-          );
-          if (totalCredits === null) {
-            return null;
-          }
-
-          const remaining = totalUsage === null ? totalCredits : Math.max(totalCredits - totalUsage, 0);
-          return remaining.toFixed(2);
-        })(),
+      planType: metadata.planType,
+      creditsBalance: metadata.creditsBalance,
       syncedAt,
       partial: errors.length > 0,
       syncError: errors.length > 0 ? errors.join(" ") : null,
@@ -1487,11 +1582,38 @@ export class ProviderUsageService {
     }
 
     if (!response.ok) {
-      throw new HttpError(
-        502,
-        "provider_usage_fetch_failed",
-        `Usage endpoint returned status ${response.status}.`,
-      );
+      const rawBody = await response.text();
+      let parsedPayload: unknown = null;
+      if (rawBody.trim().length > 0) {
+        try {
+          parsedPayload = JSON.parse(rawBody) as unknown;
+        } catch {
+          parsedPayload = null;
+        }
+      }
+
+      const detail =
+        extractUpstreamError(parsedPayload) ??
+        (() => {
+          if (rawBody.trim().length === 0) {
+            return null;
+          }
+
+          const compact = rawBody.replace(/\s+/g, " ").trim();
+          if (compact.length === 0) {
+            return null;
+          }
+
+          return compact.length > 220 ? `${compact.slice(0, 217)}...` : compact;
+        })();
+
+      const sanitizedDetail = detail ? errorMessage(new Error(detail), detail) : null;
+      const authHint = usageEndpointAuthMismatchHint(response.status, sanitizedDetail, providerConfig);
+      const baseMessage = sanitizedDetail
+        ? `Usage endpoint returned status ${response.status}. ${sanitizedDetail}`
+        : `Usage endpoint returned status ${response.status}.`;
+
+      throw new HttpError(502, "provider_usage_fetch_failed", authHint ? `${baseMessage} ${authHint}` : baseMessage);
     }
 
     try {

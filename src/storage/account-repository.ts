@@ -1,3 +1,4 @@
+import { effectiveAccountAuthMethod } from "../account-auth";
 import crypto from "node:crypto";
 import { HttpError } from "../errors";
 import { DataStore, createConnectorApiKey } from "../store";
@@ -106,7 +107,7 @@ export class AccountRepository {
 
     this.store.update((draft) => {
       const existingAccount = draft.accounts.find((account) =>
-        (account.authMethod ?? "oauth") === "oauth" && matchesLinkedOAuthIdentity(account, payload),
+        effectiveAccountAuthMethod(account) === "oauth" && matchesLinkedOAuthIdentity(account, payload),
       );
 
       if (existingAccount) {
@@ -207,29 +208,13 @@ export class AccountRepository {
     const providerAccountId = normalizeApiProviderAccountId(payload.providerAccountId, apiKey);
     const fallbackLabel = `${payload.provider.toUpperCase()} API Key`;
     const displayName = payload.displayName.trim() || fallbackLabel;
-    const manualFiveHourLimit =
-      typeof payload.manualFiveHourLimit === "number"
-        ? Math.max(0, Math.round(payload.manualFiveHourLimit))
-        : null;
-    const manualWeeklyLimit =
-      typeof payload.manualWeeklyLimit === "number"
-        ? Math.max(0, Math.round(payload.manualWeeklyLimit))
-        : null;
-    const effectiveFiveHourLimit =
-      manualFiveHourLimit !== null && manualFiveHourLimit > 0
-        ? manualFiveHourLimit
-        : API_DEFAULT_FIVE_HOUR_LIMIT;
-    const effectiveWeeklyLimit =
-      manualWeeklyLimit !== null && manualWeeklyLimit > 0
-        ? manualWeeklyLimit
-        : API_DEFAULT_WEEKLY_LIMIT;
     const nowIso = new Date().toISOString();
 
     this.store.update((draft) => {
       const existingAccount = draft.accounts.find(
         (account) =>
           account.provider === payload.provider &&
-          (account.authMethod ?? "oauth") === "api" &&
+          effectiveAccountAuthMethod(account) === "api" &&
           account.providerAccountId === providerAccountId,
       );
 
@@ -246,17 +231,13 @@ export class AccountRepository {
         existingAccount.planType = null;
         existingAccount.creditsBalance = null;
         existingAccount.quota.fiveHour.limit =
-          manualFiveHourLimit !== null && manualFiveHourLimit > 0
-            ? manualFiveHourLimit
-            : existingAccount.quota.fiveHour.limit > 0
-              ? existingAccount.quota.fiveHour.limit
-              : API_DEFAULT_FIVE_HOUR_LIMIT;
+          existingAccount.quota.fiveHour.limit > 0
+            ? existingAccount.quota.fiveHour.limit
+            : API_DEFAULT_FIVE_HOUR_LIMIT;
         existingAccount.quota.weekly.limit =
-          manualWeeklyLimit !== null && manualWeeklyLimit > 0
-            ? manualWeeklyLimit
-            : existingAccount.quota.weekly.limit > 0
-              ? existingAccount.quota.weekly.limit
-              : API_DEFAULT_WEEKLY_LIMIT;
+          existingAccount.quota.weekly.limit > 0
+            ? existingAccount.quota.weekly.limit
+            : API_DEFAULT_WEEKLY_LIMIT;
         existingAccount.quota.fiveHour.used = Math.min(
           existingAccount.quota.fiveHour.used,
           existingAccount.quota.fiveHour.limit,
@@ -299,7 +280,7 @@ export class AccountRepository {
         creditsBalance: null,
         quota: {
           fiveHour: {
-            limit: effectiveFiveHourLimit,
+            limit: API_DEFAULT_FIVE_HOUR_LIMIT,
             used: 0,
             mode: "units",
             label: null,
@@ -308,7 +289,7 @@ export class AccountRepository {
             resetsAt: null,
           },
           weekly: {
-            limit: effectiveWeeklyLimit,
+            limit: API_DEFAULT_WEEKLY_LIMIT,
             used: 0,
             mode: "units",
             label: null,
@@ -346,50 +327,6 @@ export class AccountRepository {
         }
 
         account.displayName = trimmedDisplayName;
-      }
-
-      const hasManualFiveHourLimit =
-        typeof payload.manualFiveHourLimit === "number" && Number.isFinite(payload.manualFiveHourLimit);
-      const hasManualWeeklyLimit =
-        typeof payload.manualWeeklyLimit === "number" && Number.isFinite(payload.manualWeeklyLimit);
-      const requestedManualLimitChange = hasManualFiveHourLimit || hasManualWeeklyLimit;
-
-      if (requestedManualLimitChange && (account.authMethod ?? "oauth") !== "api") {
-        throw new HttpError(
-          400,
-          "manual_limits_not_supported",
-          "Manual limits are only available for API-key accounts.",
-        );
-      }
-
-      if (requestedManualLimitChange && (account.quotaSyncStatus ?? "unavailable") === "live") {
-        throw new HttpError(
-          409,
-          "manual_limits_not_allowed",
-          "Manual limits can only be changed when live quota sync is unavailable.",
-        );
-      }
-
-      const manualFiveHourLimit = hasManualFiveHourLimit ? payload.manualFiveHourLimit : undefined;
-      const manualWeeklyLimit = hasManualWeeklyLimit ? payload.manualWeeklyLimit : undefined;
-
-      if (manualFiveHourLimit !== undefined) {
-        account.quota.fiveHour.limit = Math.max(1, Math.round(manualFiveHourLimit));
-      }
-
-      if (manualWeeklyLimit !== undefined) {
-        account.quota.weekly.limit = Math.max(1, Math.round(manualWeeklyLimit));
-      }
-
-      if (requestedManualLimitChange) {
-        account.quota.fiveHour.used = Math.min(account.quota.fiveHour.used, account.quota.fiveHour.limit);
-        account.quota.weekly.used = Math.min(account.quota.weekly.used, account.quota.weekly.limit);
-        account.quota.fiveHour.mode = "units";
-        account.quota.weekly.mode = "units";
-        account.quota.fiveHour.label = null;
-        account.quota.weekly.label = null;
-        account.quota.fiveHour.windowMinutes = null;
-        account.quota.weekly.windowMinutes = null;
       }
 
       account.updatedAt = new Date().toISOString();
