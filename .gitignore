@@ -8,5 +8,5 @@ coverage/
 !.env.example
 AGENTS.md
 reference/
-tests/
 .sisyphus/
+.ruff_cache/

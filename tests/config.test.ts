@@ -20,7 +20,9 @@ test("auto-manages session secret via file when env secret is absent", () => {
     assert.ok(fs.existsSync(sessionSecretFilePath));
 
     const persistedSecret = fs.readFileSync(sessionSecretFilePath, "utf8").trim();
-    assert.ok(persistedSecret.length > 30);
+    assert.match(persistedSecret, /^[A-Za-z0-9_-]{40,}$/);
+    const decodedSecret = Buffer.from(persistedSecret, "base64url");
+    assert.equal(decodedSecret.length >= 32, true);
     assert.equal(firstConfig.sessionSecret, persistedSecret);
 
     const mode = fs.statSync(sessionSecretFilePath).mode & 0o777;
@@ -224,4 +226,111 @@ test("requires HTTPS OAuth redirect URI for remote non-loopback hosts", () => {
   });
 
   assert.equal(config.oauthRedirectUri, "https://example.com/auth/callback");
+});
+
+test("defaults SESSION_STORE to memorystore", () => {
+  const config = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+  });
+
+  assert.equal(config.sessionStore, "memorystore");
+});
+
+test("parses SESSION_STORE and falls back for invalid values", () => {
+  const memoryConfig = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    SESSION_STORE: "memory",
+  });
+  assert.equal(memoryConfig.sessionStore, "memory");
+
+  const uppercaseConfig = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    SESSION_STORE: "MEMORY",
+  });
+  assert.equal(uppercaseConfig.sessionStore, "memory");
+
+  const invalidConfig = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    SESSION_STORE: "redis",
+  });
+  assert.equal(invalidConfig.sessionStore, "memorystore");
+});
+
+test("rejects weak SESSION_SECRET values", () => {
+  assert.throws(
+    () =>
+      resolveConfig({
+        HOST: "127.0.0.1",
+        PORT: "1455",
+        SESSION_SECRET: "short-secret",
+        PUBLIC_DIR: path.join(process.cwd(), "public"),
+      }),
+    /SESSION_SECRET must be at least 16 bytes long/,
+  );
+});
+
+test("rejects weak SESSION_SECRET values loaded from file", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omni-config-weak-secret-"));
+
+  try {
+    const dataFilePath = path.join(directory, "store.json");
+    const sessionSecretFilePath = `${dataFilePath}.session`;
+    fs.writeFileSync(sessionSecretFilePath, "tiny", "utf8");
+
+    assert.throws(
+      () =>
+        resolveConfig({
+          HOST: "127.0.0.1",
+          PORT: "1455",
+          DATA_FILE: dataFilePath,
+          PUBLIC_DIR: path.join(process.cwd(), "public"),
+        }),
+      /SESSION_SECRET file at .* must be at least 16 bytes long/,
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("defaults TRUST_PROXY_HOPS to 0 and parses valid values", () => {
+  const defaultConfig = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+  });
+  assert.equal(defaultConfig.trustProxyHops, 0);
+
+  const configuredConfig = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    TRUST_PROXY_HOPS: "2",
+  });
+  assert.equal(configuredConfig.trustProxyHops, 2);
+});
+
+test("falls back to TRUST_PROXY_HOPS=0 for invalid values", () => {
+  const config = resolveConfig({
+    HOST: "127.0.0.1",
+    PORT: "1455",
+    SESSION_SECRET: "test-session-secret",
+    PUBLIC_DIR: path.join(process.cwd(), "public"),
+    TRUST_PROXY_HOPS: "-1",
+  });
+
+  assert.equal(config.trustProxyHops, 0);
 });

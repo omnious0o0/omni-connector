@@ -25,6 +25,148 @@ function createTempDataPath(): { dataFilePath: string; cleanup: () => void } {
   };
 }
 
+function writeVerificationSeededStore(
+  dataFilePath: string,
+  options: {
+    accountId?: string;
+    actionUrl?: string;
+    includeIssue?: boolean;
+  } = {},
+): string {
+  const now = new Date().toISOString();
+  const accountId = options.accountId ?? "acc_verification_seeded";
+  const includeIssue = options.includeIssue ?? true;
+  const actionUrl = options.actionUrl ?? "https://support.google.com/code/answer/170248?hl=en";
+
+  const seededStore = {
+    connector: {
+      apiKey: "omni_seeded_verification_key",
+      createdAt: now,
+      lastRotatedAt: now,
+      routingPreferences: {
+        preferredProvider: "auto",
+        fallbackProviders: [],
+        priorityModels: ["auto"],
+      },
+    },
+    accounts: [
+      {
+        id: accountId,
+        provider: "gemini",
+        authMethod: "oauth",
+        oauthProfileId: "gemini-cli",
+        providerAccountId: "gemini-verification-seeded",
+        chatgptAccountId: null,
+        displayName: "Gemini Verification Seeded",
+        accessToken: "gemini-seeded-token",
+        refreshToken: "gemini-seeded-refresh",
+        tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        createdAt: now,
+        updatedAt: now,
+        quotaSyncedAt: now,
+        quotaSyncStatus: "unavailable",
+        quotaSyncError: "Live quota sync failed: status 403.",
+        quotaSyncIssue: includeIssue
+          ? {
+              kind: "account_verification_required",
+              title: "Account verification required",
+              steps: [
+                "Open the Google verification page.",
+                "Finish verification with the same Google account you connected here.",
+                "Return here and refresh your dashboard.",
+              ],
+              actionLabel: "Verify account",
+              actionUrl,
+            }
+          : null,
+        planType: null,
+        creditsBalance: null,
+        quota: {
+          fiveHour: {
+            limit: 0,
+            used: 0,
+            mode: "units",
+            windowStartedAt: now,
+            resetsAt: null,
+          },
+          weekly: {
+            limit: 0,
+            used: 0,
+            mode: "units",
+            windowStartedAt: now,
+            resetsAt: null,
+          },
+        },
+      },
+    ],
+  };
+
+  fs.writeFileSync(dataFilePath, JSON.stringify(seededStore, null, 2), "utf8");
+  return accountId;
+}
+
+function extractSessionIdFromSetCookie(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  for (const entry of value) {
+    if (typeof entry !== "string" || !entry.startsWith("omni_connector_sid=")) {
+      continue;
+    }
+
+    const pair = entry.split(";", 1)[0] ?? "";
+    const cookieValue = pair.slice("omni_connector_sid=".length);
+    if (!cookieValue) {
+      continue;
+    }
+
+    const decodedValue = decodeURIComponent(cookieValue);
+    const unsignedValue = decodedValue.startsWith("s:") ? decodedValue.slice(2) : decodedValue;
+    const sessionId = unsignedValue.split(".", 1)[0]?.trim() ?? "";
+    if (sessionId.length > 0) {
+      return sessionId;
+    }
+  }
+
+  return null;
+}
+
+function firstSetCookie(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "";
+  }
+
+  return typeof value[0] === "string" ? value[0] : "";
+}
+
+function assertStrictRouteDecisionShape(payload: unknown): void {
+  assert.equal(payload !== null && typeof payload === "object", true);
+  const decision = payload as {
+    routedTo?: unknown;
+    unitsConsumed?: unknown;
+    remaining?: unknown;
+  };
+
+  assert.equal(Number.isFinite(Number(decision.unitsConsumed)), true);
+  assert.equal(decision.routedTo !== null && typeof decision.routedTo === "object", true);
+
+  const routedTo = decision.routedTo as Record<string, unknown>;
+  assert.equal(typeof routedTo.provider, "string");
+  assert.equal(typeof routedTo.authMethod, "string");
+  assert.equal(typeof routedTo.displayName, "string");
+  assert.equal("id" in routedTo, false);
+  assert.equal("providerAccountId" in routedTo, false);
+  assert.equal("chatgptAccountId" in routedTo, false);
+  assert.equal("accessToken" in routedTo, false);
+  assert.equal("refreshToken" in routedTo, false);
+
+  assert.equal(decision.remaining !== null && typeof decision.remaining === "object", true);
+  const remaining = decision.remaining as Record<string, unknown>;
+  assert.equal(Number.isFinite(Number(remaining.fiveHour)), true);
+  assert.equal(Number.isFinite(Number(remaining.weekly)), true);
+}
+
 function readRequestBody(request: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -406,10 +548,26 @@ async function linkOAuthAccount(
   startPath: string = "/auth/omni/start",
 ): Promise<void> {
   const oauthStart = await agent.get(startPath).expect(302);
+  const startCookie = firstSetCookie(oauthStart.headers["set-cookie"]);
+  assert.match(startCookie, /omni_connector_sid=/i);
+  assert.match(startCookie, /HttpOnly/i);
+  assert.match(startCookie, /Path=\//i);
+  assert.match(startCookie, /SameSite=Lax/i);
+
   const authorizationLocation = oauthStart.header.location;
   assert.ok(authorizationLocation);
 
   const authorizationUrl = new URL(authorizationLocation);
+  assert.equal(authorizationUrl.searchParams.get("response_type"), "code");
+  assert.equal((authorizationUrl.searchParams.get("client_id") ?? "").length > 0, true);
+  assert.equal(authorizationUrl.searchParams.get("code_challenge_method"), "S256");
+  assert.equal((authorizationUrl.searchParams.get("code_challenge") ?? "").length >= 43, true);
+  const redirectUri = authorizationUrl.searchParams.get("redirect_uri");
+  assert.ok(redirectUri);
+  const redirectUrl = new URL(redirectUri);
+  assert.equal(redirectUrl.pathname.startsWith("/"), true);
+  assert.equal((authorizationUrl.searchParams.get("state") ?? "").length > 0, true);
+
   const authorizationResponse = await fetch(authorizationUrl, { redirect: "manual" });
   assert.equal(authorizationResponse.status, 302);
 
@@ -417,15 +575,33 @@ async function linkOAuthAccount(
   assert.ok(callbackLocation);
 
   const callbackUrl = new URL(callbackLocation);
-  await agent
+  assert.equal(callbackUrl.origin, redirectUrl.origin);
+  assert.equal(callbackUrl.pathname, redirectUrl.pathname);
+  assert.equal((callbackUrl.searchParams.get("code") ?? "").length > 0, true);
+  assert.equal((callbackUrl.searchParams.get("state") ?? "").length > 0, true);
+
+  const callbackResponse = await agent
     .get(`${callbackUrl.pathname}${callbackUrl.search}`)
     .expect(302)
     .expect("location", "/?connected=1");
+  const callbackCookie = firstSetCookie(callbackResponse.headers["set-cookie"]);
+  assert.match(callbackCookie, /omni_connector_sid=/i);
+  assert.match(callbackCookie, /HttpOnly/i);
+  assert.match(callbackCookie, /Path=\//i);
+  assert.match(callbackCookie, /SameSite=Lax/i);
+
+  const startSessionId = extractSessionIdFromSetCookie(oauthStart.headers["set-cookie"]);
+  const callbackSessionId = extractSessionIdFromSetCookie(callbackResponse.headers["set-cookie"]);
+  assert.ok(startSessionId);
+  assert.ok(callbackSessionId);
+  assert.notEqual(callbackSessionId, startSessionId);
 }
 
 interface MockModelsServerOptions {
   expectedApiKey?: string;
   responseDelayMs?: number;
+  failStatus?: number;
+  failPayloadMessage?: string;
 }
 
 async function startMockModelsServer(options: MockModelsServerOptions = {}): Promise<{
@@ -434,6 +610,8 @@ async function startMockModelsServer(options: MockModelsServerOptions = {}): Pro
 }> {
   const expectedApiKey = options.expectedApiKey ?? "codex-models-key";
   const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
+  const failStatus = options.failStatus ?? null;
+  const failPayloadMessage = options.failPayloadMessage ?? "upstream failure";
 
   const server = http.createServer(async (request, response) => {
     const method = request.method ?? "GET";
@@ -445,6 +623,18 @@ async function startMockModelsServer(options: MockModelsServerOptions = {}): Pro
       if (authorization !== `Bearer ${expectedApiKey}`) {
         response.writeHead(401, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      if (failStatus !== null) {
+        response.writeHead(failStatus, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: failPayloadMessage,
+            },
+          }),
+        );
         return;
       }
 
@@ -963,6 +1153,41 @@ test("returns 404 for missing /assets files instead of SPA fallback HTML", async
   }
 });
 
+test("serves verification-launch script and does not fallback to SPA for missing script paths", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const scriptResponse = await supertest(app)
+      .get("/verification-launch.js")
+      .expect(200)
+      .expect("content-type", /javascript|text\/plain/);
+    assert.match(scriptResponse.text, /window\.open\(/);
+    assert.match(scriptResponse.text, /window\.location\.replace\(/);
+
+    await supertest(app)
+      .get("/verification-launch.js.missing")
+      .expect(404)
+      .expect(({ text }) => {
+        assert.match(text, /Cannot GET \/verification-launch\.js\.missing/);
+        assert.doesNotMatch(text, /<title>omni-connector<\/title>/i);
+      });
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("accepts callback from earlier OAuth start when multiple starts were initiated", async () => {
   const temp = createTempDataPath();
   const mockOAuth = await startMockOAuthServer();
@@ -1075,6 +1300,56 @@ test("rejects OAuth callback without matching session cookie", async () => {
   }
 });
 
+test("regenerates session id after successful OAuth callback", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: true,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    const oauthStart = await agent.get("/auth/omni/start").expect(302);
+    const startSessionId = extractSessionIdFromSetCookie(oauthStart.headers["set-cookie"]);
+    assert.ok(startSessionId);
+
+    const authorizationLocation = oauthStart.header.location;
+    assert.ok(authorizationLocation);
+    const authorizationUrl = new URL(authorizationLocation);
+    const authorizationResponse = await fetch(authorizationUrl, { redirect: "manual" });
+    assert.equal(authorizationResponse.status, 302);
+
+    const callbackLocation = authorizationResponse.headers.get("location");
+    assert.ok(callbackLocation);
+    const callbackUrl = new URL(callbackLocation);
+
+    const callbackResponse = await agent
+      .get(`${callbackUrl.pathname}${callbackUrl.search}`)
+      .expect(302)
+      .expect("location", "/?connected=1");
+    const callbackSessionId = extractSessionIdFromSetCookie(callbackResponse.headers["set-cookie"]);
+    assert.ok(callbackSessionId);
+    assert.notEqual(callbackSessionId, startSessionId);
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
 test("surfaces OAuth provider callback error code and description", async () => {
   const temp = createTempDataPath();
 
@@ -1170,7 +1445,7 @@ test("connects gemini through both OAuth options (Gemini CLI and Antigravity)", 
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     });
 
@@ -1253,8 +1528,11 @@ test("connects gemini through both OAuth options (Gemini CLI and Antigravity)", 
       .send({ units: 1 })
       .expect(200);
 
+    assertStrictRouteDecisionShape(routeResult.body);
     assert.equal(routeResult.body.routedTo.provider, "gemini");
-    assert.match(routeResult.body.authorizationHeader, /^Bearer mock-access-/);
+    assert.equal(routeResult.body.routedTo.authMethod, "oauth");
+    assert.deepEqual(Object.keys(routeResult.body.routedTo).sort(), ["authMethod", "displayName", "provider"]);
+    assert.equal("authorizationHeader" in routeResult.body, false);
 
     await agent.get("/auth/gemini/start?profile=antigravity").expect(302);
   } finally {
@@ -1403,6 +1681,7 @@ test("routes with preferred provider, fallback order, and model hint override", 
       .set("Authorization", `Bearer ${connectorKey}`)
       .send({ units: 1 })
       .expect(200);
+    assertStrictRouteDecisionShape(fallbackRoute.body);
     assert.equal(fallbackRoute.body.routedTo.provider, "claude");
 
     await agent
@@ -1420,6 +1699,7 @@ test("routes with preferred provider, fallback order, and model hint override", 
       .set("Authorization", `Bearer ${connectorKey}`)
       .send({ units: 1 })
       .expect(200);
+    assertStrictRouteDecisionShape(preferredRoute.body);
     assert.equal(preferredRoute.body.routedTo.provider, "gemini");
 
     const modelHintRoute = await agent
@@ -1427,6 +1707,7 @@ test("routes with preferred provider, fallback order, and model hint override", 
       .set("Authorization", `Bearer ${connectorKey}`)
       .send({ units: 1, model: "codex" })
       .expect(200);
+    assertStrictRouteDecisionShape(modelHintRoute.body);
     assert.equal(modelHintRoute.body.routedTo.provider, "codex");
   } finally {
     temp.cleanup();
@@ -1442,7 +1723,7 @@ test("estimates Gemini OAuth usage when live usage data is unavailable", async (
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     });
 
@@ -1772,6 +2053,164 @@ test("adds actionable validation guidance when Gemini quota stays blocked after 
   }
 });
 
+test("rejects verification start without account id", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app).get("/verification/start").expect(400).expect("Account ID is required.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("rejects verification start when account has no verification guidance", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const accountId = writeVerificationSeededStore(temp.dataFilePath, { includeIssue: false });
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/verification/start")
+      .query({ accountId })
+      .expect(409)
+      .expect("Verification guidance is not available for this account.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("rejects verification start when action URL is malformed", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const accountId = writeVerificationSeededStore(temp.dataFilePath, { actionUrl: "not-a-url" });
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/verification/start")
+      .query({ accountId })
+      .expect(400)
+      .expect("Verification URL is invalid.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("rejects verification start when action URL is not HTTPS", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const accountId = writeVerificationSeededStore(temp.dataFilePath, { actionUrl: "http://example.com/verify" });
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/verification/start")
+      .query({ accountId })
+      .expect(400)
+      .expect("Verification URL must use HTTPS.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("rejects verification completion without state", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/verification/complete")
+      .expect(400)
+      .expect("Verification state is required.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("rejects verification completion when state does not match session", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const accountId = writeVerificationSeededStore(temp.dataFilePath);
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+    await agent.get("/verification/start").query({ accountId }).expect(200);
+
+    await agent
+      .get("/verification/complete")
+      .query({ state: "wrong-state" })
+      .expect(400)
+      .expect("Verification session expired. Start verification again.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("opens verification helper and returns to dashboard after completion", async () => {
   const temp = createTempDataPath();
 
@@ -1857,9 +2296,17 @@ test("opens verification helper and returns to dashboard after completion", asyn
       .query({ accountId: "acc_verification_route" })
       .expect(200)
       .expect("content-type", /html/);
+    const launchSessionId = extractSessionIdFromSetCookie(launch.headers["set-cookie"]);
+    assert.ok(launchSessionId);
 
     assert.match(launch.text, /Finish account verification/i);
     assert.match(launch.text, /Open verification page/i);
+    assert.match(
+      launch.text,
+      /<p id="verification-status" role="status" aria-live="polite" aria-atomic="true">/i,
+    );
+    assert.match(launch.text, /<script src="\/verification-launch\.js" defer><\/script>/i);
+    assert.doesNotMatch(launch.text, /window\.open\(/i);
     const stateMatch = launch.text.match(/\/verification\/complete\?state=([^"<\s]+)/i);
     assert.ok(stateMatch);
     const encodedState = stateMatch?.[1] ?? "";
@@ -1869,6 +2316,9 @@ test("opens verification helper and returns to dashboard after completion", asyn
       .get("/verification/complete")
       .query({ state })
       .expect(302);
+    const completionSessionId = extractSessionIdFromSetCookie(completion.headers["set-cookie"]);
+    assert.ok(completionSessionId);
+    assert.notEqual(completionSessionId, launchSessionId);
     assert.equal(completion.headers.location, "/?verified=1");
 
     const completionReplay = await agent
@@ -1969,9 +2419,12 @@ test("connects account through external OAuth provider and routes by connector k
       .send({ units: 5 })
       .expect(200);
 
+    assertStrictRouteDecisionShape(routeResult.body);
     assert.equal(routeResult.body.unitsConsumed, 5);
     assert.equal(routeResult.body.routedTo.provider, "codex");
-    assert.match(routeResult.body.authorizationHeader, /^Bearer mock-access-/);
+    assert.equal(routeResult.body.routedTo.authMethod, "oauth");
+    assert.deepEqual(Object.keys(routeResult.body.routedTo).sort(), ["authMethod", "displayName", "provider"]);
+    assert.equal("authorizationHeader" in routeResult.body, false);
     assert.equal(routeResult.body.quotaConsumed, false);
 
     const rotateResult = await agent
@@ -1981,17 +2434,21 @@ test("connects account through external OAuth provider and routes by connector k
     const rotatedKey = rotateResult.body.apiKey as string;
     assert.notEqual(rotatedKey, initialConnectorKey);
 
-    await agent
+    const revokedRoute = await agent
       .post("/api/connector/route")
       .set("Authorization", `Bearer ${initialConnectorKey}`)
       .send({ units: 1 })
-      .expect(401);
+      .expect(401)
+      .expect("content-type", /json/);
+    assert.equal(revokedRoute.body.error, "invalid_connector_key");
+    assert.equal(revokedRoute.body.message, "Connector API key is missing or invalid.");
 
-    await agent
+    const rotatedRoute = await agent
       .post("/api/connector/route")
       .set("Authorization", `Bearer ${rotatedKey}`)
       .send({ units: 1 })
       .expect(200);
+    assertStrictRouteDecisionShape(rotatedRoute.body);
 
     const accountId = dashboardAfter.body.accounts[0]?.id as string | undefined;
     assert.ok(accountId);
@@ -2253,9 +2710,11 @@ test("lists providers and links API-key account for non-OAuth provider", async (
       .send({ units: 2 })
       .expect(200);
 
+    assertStrictRouteDecisionShape(routeResult.body);
     assert.equal(routeResult.body.routedTo.provider, "gemini");
     assert.equal(routeResult.body.routedTo.authMethod, "api");
-    assert.equal(routeResult.body.authorizationHeader, "Bearer gem-api-key-123");
+    assert.deepEqual(Object.keys(routeResult.body.routedTo).sort(), ["authMethod", "displayName", "provider"]);
+    assert.equal("authorizationHeader" in routeResult.body, false);
     assert.equal(routeResult.body.quotaConsumed, true);
   } finally {
     if (previousGeminiAutoDiscover === undefined) {
@@ -2362,7 +2821,7 @@ test("rejects manual limits on API link when live usage adapter is configured", 
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     }).providerUsage;
 
@@ -2736,6 +3195,196 @@ test("requires OAuth session authorization when remote dashboard mode is enabled
   }
 });
 
+test("requires dashboard authorization for verification routes when remote dashboard mode is enabled", async () => {
+  const temp = createTempDataPath();
+  const mockOAuth = await startMockOAuthServer();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      allowRemoteDashboard: true,
+      oauthAuthorizationUrl: `${mockOAuth.baseUrl}/oauth/authorize`,
+      oauthTokenUrl: `${mockOAuth.baseUrl}/oauth/token`,
+      oauthUserInfoUrl: `${mockOAuth.baseUrl}/oauth/userinfo`,
+      oauthQuotaUrl: `${mockOAuth.baseUrl}/backend-api/wham/usage`,
+      oauthScopes: ["openid", "profile", "email", "offline_access"],
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .get("/verification/start")
+      .query({ accountId: "missing" })
+      .expect(401)
+      .expect("Dashboard session authorization is required when ALLOW_REMOTE_DASHBOARD=true.");
+
+    await agent
+      .get("/verification/complete")
+      .query({ state: "any" })
+      .expect(401)
+      .expect("Dashboard session authorization is required when ALLOW_REMOTE_DASHBOARD=true.");
+
+    await linkOAuthAccount(agent);
+
+    await agent
+      .get("/verification/start")
+      .query({ accountId: "missing" })
+      .expect(404)
+      .expect("Account could not be found.");
+
+    await agent
+      .get("/verification/complete")
+      .query({ state: "any" })
+      .expect(400)
+      .expect("Verification session expired. Start verification again.");
+  } finally {
+    await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("requires HTTPS for non-loopback remote dashboard access", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const appWithoutTrustedProxy = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      allowRemoteDashboard: true,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(appWithoutTrustedProxy)
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .set("Host", "example.com")
+      .set("X-Forwarded-Proto", "https")
+      .expect(400)
+      .expect(({ body }) => {
+        assert.equal(body.error, "https_required");
+      });
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      allowRemoteDashboard: true,
+      trustProxyHops: 1,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const insecureResponse = await supertest(app)
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .set("Host", "example.com")
+      .expect(400);
+    assert.equal(insecureResponse.body.error, "https_required");
+
+    await supertest(app)
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .set("Host", "example.com")
+      .set("X-Forwarded-Proto", "https")
+      .expect(401)
+      .expect(({ body }) => {
+        assert.equal(body.error, "dashboard_auth_required");
+      });
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("requires HTTPS for verification route on non-loopback remote dashboard access", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      allowRemoteDashboard: true,
+      trustProxyHops: 1,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    await supertest(app)
+      .get("/verification/start")
+      .query({ accountId: "acc_verification_route" })
+      .set("Host", "example.com")
+      .expect(400)
+      .expect("HTTPS is required for non-loopback access when ALLOW_REMOTE_DASHBOARD=true.");
+
+    await supertest(app)
+      .get("/verification/start")
+      .query({ accountId: "acc_verification_route" })
+      .set("Host", "example.com")
+      .set("X-Forwarded-Proto", "https")
+      .expect(401)
+      .expect("Dashboard session authorization is required when ALLOW_REMOTE_DASHBOARD=true.");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("sets Secure session cookie for OAuth start behind trusted HTTPS proxy", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      allowRemoteDashboard: true,
+      trustProxyHops: 1,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    });
+
+    const startResponse = await supertest(app)
+      .get("/auth/omni/start")
+      .set("Host", "example.com")
+      .set("X-Forwarded-Proto", "https")
+      .expect(302);
+
+    const cookie = firstSetCookie(startResponse.headers["set-cookie"]);
+    assert.match(cookie, /omni_connector_sid=/i);
+    assert.match(cookie, /HttpOnly/i);
+    assert.match(cookie, /Path=\//i);
+    assert.match(cookie, /SameSite=Lax/i);
+    assert.match(cookie, /Secure/i);
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("routes in strict live mode when provider usage adapter is configured", async () => {
   const temp = createTempDataPath();
   const mockUsage = await startMockUsageServer();
@@ -2745,7 +3394,7 @@ test("routes in strict live mode when provider usage adapter is configured", asy
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     }).providerUsage;
 
@@ -2815,6 +3464,72 @@ test("routes in strict live mode when provider usage adapter is configured", asy
   }
 });
 
+test("does not leak usage URL secrets when provider usage URL is invalid", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const providerUsage = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded-session-secret",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    }).providerUsage;
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      strictLiveQuota: true,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerUsage: {
+        ...providerUsage,
+        gemini: {
+          ...providerUsage.gemini,
+          parser: "json_totals",
+          authMode: "query-api-key",
+          authQueryParam: "key",
+          fiveHourUrl: "http://example.com/usage/5h?token=super-secret-token&api_key=super-secret-key",
+          weeklyUrl: "https://example.com/usage/7d",
+          fiveHourLimit: 1000,
+          weeklyLimit: 8000,
+        },
+      },
+    });
+
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "gemini",
+        displayName: "Gemini Invalid Usage URL",
+        providerAccountId: "gemini-invalid-usage-url",
+        apiKey: "gem-live-key",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const syncError = String(dashboard.body.accounts[0]?.quotaSyncError ?? "");
+    assert.match(syncError, /Usage URL must use HTTPS\./);
+    assert.doesNotMatch(syncError, /super-secret-token/i);
+    assert.doesNotMatch(syncError, /super-secret-key/i);
+    assert.doesNotMatch(syncError, /http:\/\/example\.com/i);
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("marks partial provider usage sync as stale in strict live mode", async () => {
   const temp = createTempDataPath();
   const mockUsage = await startMockUsageServer({ failFiveHourStatus: 500 });
@@ -2824,7 +3539,7 @@ test("marks partial provider usage sync as stale in strict live mode", async () 
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     }).providerUsage;
 
@@ -2898,7 +3613,7 @@ test("applies strict live sync cooldown after provider usage failure", async () 
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     }).providerUsage;
 
@@ -3019,7 +3734,7 @@ test("returns dashboard quickly while slow quota sync continues in background", 
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     }).providerUsage;
 
@@ -3137,7 +3852,7 @@ test("returns connected models quickly while slow quota sync continues in backgr
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     });
 
@@ -3432,7 +4147,7 @@ test("returns connected provider model IDs from live provider responses", async 
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     });
 
@@ -3490,6 +4205,81 @@ test("returns connected provider model IDs from live provider responses", async 
   }
 });
 
+test("redacts secrets from /api/models/connected syncError payloads", async () => {
+  const temp = createTempDataPath();
+  const mockModelsServer = await startMockModelsServer({
+    failStatus: 503,
+    failPayloadMessage:
+      "Bearer sk-live-super-secret-token and token=super-secret-token and api_key=super-secret-key should never leak",
+  });
+
+  try {
+    const defaults = resolveConfig({
+      HOST: "127.0.0.1",
+      PORT: "1455",
+      DATA_FILE: temp.dataFilePath,
+      SESSION_SECRET: "seeded-session-secret",
+      PUBLIC_DIR: path.join(process.cwd(), "public"),
+    });
+
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerInferenceBaseUrls: {
+        ...defaults.providerInferenceBaseUrls,
+        codex: `${mockModelsServer.baseUrl}/v1`,
+      },
+    });
+
+    const agent = supertest.agent(app);
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "codex",
+        apiKey: "codex-models-key",
+        providerAccountId: "models-redaction-acc",
+        displayName: "Codex Models Redaction",
+      })
+      .expect(201);
+
+    const modelsResponse = await agent
+      .get("/api/models/connected")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+
+    const providers = modelsResponse.body.providers as Array<{
+      provider: string;
+      accountCount: number;
+      status: string;
+      modelIds: string[];
+      syncError: string | null;
+    }>;
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0]?.provider, "codex");
+    assert.equal(providers[0]?.accountCount, 1);
+    assert.equal(providers[0]?.status, "unavailable");
+    assert.deepEqual(providers[0]?.modelIds, []);
+
+    const syncError = String(providers[0]?.syncError ?? "");
+    assert.match(syncError, /status 503/i);
+    assert.match(syncError, /\[redacted\]/i);
+    assert.doesNotMatch(syncError, /sk-live-super-secret-token/i);
+    assert.doesNotMatch(syncError, /super-secret-token/i);
+    assert.doesNotMatch(syncError, /super-secret-key/i);
+  } finally {
+    await mockModelsServer.close();
+    temp.cleanup();
+  }
+});
+
 test("uses codex oauth scoped model endpoint and filters unsupported model IDs", async () => {
   const temp = createTempDataPath();
   const mockModelsServer = await startMockCodexOauthModelsServer();
@@ -3499,7 +4289,7 @@ test("uses codex oauth scoped model endpoint and filters unsupported model IDs",
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     });
     const now = new Date().toISOString();
@@ -3613,7 +4403,7 @@ test("uses Gemini OAuth quota endpoint to return accessible model IDs", async ()
       HOST: "127.0.0.1",
       PORT: "1455",
       DATA_FILE: temp.dataFilePath,
-      SESSION_SECRET: "seeded",
+      SESSION_SECRET: "seeded-session-secret",
       PUBLIC_DIR: path.join(process.cwd(), "public"),
     });
     const now = new Date().toISOString();
@@ -3782,6 +4572,64 @@ test("persists connector and oauth tokens encrypted at rest", async () => {
       .expect(200);
   } finally {
     await mockOAuth.close();
+    temp.cleanup();
+  }
+});
+
+test("stores api keys starting with enc:v1: as encrypted and reload-safe", async () => {
+  const temp = createTempDataPath();
+
+  try {
+    const appConfig = {
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+    };
+
+    const app = createApp(appConfig);
+    const agent = supertest.agent(app);
+
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "codex",
+        displayName: "Enc Prefix API Key",
+        providerAccountId: "enc-prefix-key-account",
+        apiKey: "enc:v1:not-really-encrypted",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    assert.equal(dashboard.body.accounts.length, 1);
+    assert.equal(dashboard.body.accounts[0]?.providerAccountId, "enc-prefix-key-account");
+
+    const persistedRaw = JSON.parse(fs.readFileSync(temp.dataFilePath, "utf8")) as {
+      accounts: Array<{
+        accessToken: string;
+      }>;
+    };
+    const persistedAccessToken = persistedRaw.accounts[0]?.accessToken ?? "";
+    assert.match(persistedAccessToken, /^enc:v1:/);
+    assert.notEqual(persistedAccessToken, "enc:v1:not-really-encrypted");
+
+    const reloadedApp = createApp(appConfig);
+    const reloadedDashboard = await supertest(reloadedApp)
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    assert.equal(reloadedDashboard.body.accounts.length, 1);
+    assert.equal(reloadedDashboard.body.accounts[0]?.providerAccountId, "enc-prefix-key-account");
+  } finally {
     temp.cleanup();
   }
 });
