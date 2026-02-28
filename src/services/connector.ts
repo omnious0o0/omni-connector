@@ -151,6 +151,7 @@ function orderCandidatesByRoutingPreferences(
 }
 
 const DASHBOARD_SYNC_WAIT_BUDGET_MS = 350;
+const MODELS_TOKEN_REFRESH_WAIT_BUDGET_MS = 1_200;
 const STRICT_LIVE_RETRY_COOLDOWN_MS = 25_000;
 const LEGACY_GEMINI_PLACEHOLDER_FIVE_HOUR_LIMIT = 50_000;
 const LEGACY_GEMINI_PLACEHOLDER_WEEKLY_LIMIT = 500_000;
@@ -308,6 +309,7 @@ function sleep(ms: number): Promise<void> {
 
 export class ConnectorService {
   private syncInFlight: Promise<void> | null = null;
+  private tokenRefreshInFlight: Promise<void> | null = null;
 
   public constructor(
     private readonly accounts: AccountRepository,
@@ -341,6 +343,11 @@ export class ConnectorService {
 
   public async connectedProviderModels(): Promise<ConnectedProviderModelsPayload> {
     await this.syncAccountStateWithBudget(DASHBOARD_SYNC_WAIT_BUDGET_MS);
+    const firstSnapshot = this.accounts.read();
+    await Promise.race([
+      this.refreshExpiringOauthTokens(firstSnapshot.accounts),
+      sleep(MODELS_TOKEN_REFRESH_WAIT_BUDGET_MS),
+    ]);
     const snapshot = this.accounts.read();
     return await this.providerModelsService.fetchConnectedProviderModels(snapshot.accounts);
   }
@@ -609,57 +616,9 @@ export class ConnectorService {
   private async executeAccountSync(): Promise<void> {
     const snapshot = this.accounts.read();
 
+    await this.refreshExpiringOauthTokens(snapshot.accounts);
+
     for (const target of snapshot.accounts) {
-      if (
-        (target.authMethod ?? "oauth") === "oauth" &&
-        target.refreshToken &&
-        this.oauthProviderService.isTokenNearExpiry(target.tokenExpiresAt)
-      ) {
-        try {
-          const refreshedToken = await this.oauthProviderService.refreshAccessTokenFor(
-            target.provider,
-            target.oauthProfileId,
-            target.refreshToken,
-          );
-          const nowIso = new Date().toISOString();
-
-          this.accounts.update((draft) => {
-            const account = draft.accounts.find((candidate) => candidate.id === target.id);
-            if (!account) {
-              return;
-            }
-
-            account.accessToken = refreshedToken.accessToken;
-            if (refreshedToken.refreshToken) {
-              account.refreshToken = refreshedToken.refreshToken;
-            }
-            account.tokenExpiresAt = refreshedToken.tokenExpiresAt;
-            account.updatedAt = nowIso;
-          });
-          target.accessToken = refreshedToken.accessToken;
-          target.refreshToken = refreshedToken.refreshToken ?? target.refreshToken;
-          target.tokenExpiresAt = refreshedToken.tokenExpiresAt;
-        } catch (error) {
-          const detail = syncErrorDetail(error, "unknown token refresh failure");
-          const message = "Failed to refresh access token.";
-          process.stderr.write(`Access token refresh failed for account ${target.id}: ${detail}\n`);
-          const nowIso = new Date().toISOString();
-          this.accounts.update((draft) => {
-            const account = draft.accounts.find((candidate) => candidate.id === target.id);
-            if (!account) {
-              return;
-            }
-
-            account.quotaSyncStatus =
-              this.strictLiveQuota || account.quota.fiveHour.limit <= 0 ? "unavailable" : "stale";
-            account.quotaSyncError = message;
-            account.quotaSyncIssue = null;
-            account.quotaSyncedAt = nowIso;
-            account.updatedAt = nowIso;
-          });
-        }
-      }
-
       if (!this.shouldSyncQuota(target)) {
         continue;
       }
@@ -849,6 +808,74 @@ export class ConnectorService {
         });
       }
     }
+  }
+
+  private async refreshExpiringOauthTokens(accounts: ConnectedAccount[]): Promise<void> {
+    if (this.tokenRefreshInFlight) {
+      await this.tokenRefreshInFlight;
+      return;
+    }
+
+    this.tokenRefreshInFlight = (async () => {
+      for (const target of accounts) {
+        if ((target.authMethod ?? "oauth") !== "oauth" || !target.refreshToken) {
+          continue;
+        }
+
+        if (!this.oauthProviderService.isTokenNearExpiry(target.tokenExpiresAt)) {
+          continue;
+        }
+
+        try {
+          const refreshedToken = await this.oauthProviderService.refreshAccessTokenFor(
+            target.provider,
+            target.oauthProfileId,
+            target.refreshToken,
+          );
+          const nowIso = new Date().toISOString();
+
+          this.accounts.update((draft) => {
+            const account = draft.accounts.find((candidate) => candidate.id === target.id);
+            if (!account) {
+              return;
+            }
+
+            account.accessToken = refreshedToken.accessToken;
+            if (refreshedToken.refreshToken) {
+              account.refreshToken = refreshedToken.refreshToken;
+            }
+            account.tokenExpiresAt = refreshedToken.tokenExpiresAt;
+            account.updatedAt = nowIso;
+          });
+
+          target.accessToken = refreshedToken.accessToken;
+          target.refreshToken = refreshedToken.refreshToken ?? target.refreshToken;
+          target.tokenExpiresAt = refreshedToken.tokenExpiresAt;
+        } catch (error) {
+          const detail = syncErrorDetail(error, "unknown token refresh failure");
+          const message = "Failed to refresh access token.";
+          process.stderr.write(`Access token refresh failed for account ${target.id}: ${detail}\n`);
+          const nowIso = new Date().toISOString();
+          this.accounts.update((draft) => {
+            const account = draft.accounts.find((candidate) => candidate.id === target.id);
+            if (!account) {
+              return;
+            }
+
+            account.quotaSyncStatus =
+              this.strictLiveQuota || account.quota.fiveHour.limit <= 0 ? "unavailable" : "stale";
+            account.quotaSyncError = message;
+            account.quotaSyncIssue = null;
+            account.quotaSyncedAt = nowIso;
+            account.updatedAt = nowIso;
+          });
+        }
+      }
+    })().finally(() => {
+      this.tokenRefreshInFlight = null;
+    });
+
+    await this.tokenRefreshInFlight;
   }
 
   private calculateTotals(accounts: DashboardAccount[]): DashboardTotals {
