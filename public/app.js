@@ -1047,6 +1047,24 @@ function cadenceLabelFromText(value) {
   return "";
 }
 
+function cadenceLabelFromResetAt(resetIso) {
+  if (typeof resetIso !== "string" || resetIso.trim().length === 0) {
+    return "";
+  }
+
+  const resetMs = Date.parse(resetIso);
+  if (!Number.isFinite(resetMs)) {
+    return "";
+  }
+
+  const remainingMs = resetMs - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    return "";
+  }
+
+  return compactDurationLabel(remainingMs) ?? "";
+}
+
 function normalizeQuotaLabel(labelValue) {
   if (typeof labelValue !== "string") {
     return "";
@@ -1135,6 +1153,7 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
   const explicitLabel = normalizeQuotaLabel(windowData?.label);
   const explicitCadenceLabel = cadenceLabelFromText(explicitLabel);
   const scheduleLabel = quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt);
+  const resetCadenceLabel = cadenceLabelFromResetAt(presentation.resetAt);
   const limit = Number(windowData?.limit);
   const used = Number(windowData?.used);
   const remaining = Number(windowData?.remaining);
@@ -1144,7 +1163,7 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
 
   return {
     ...presentation,
-    label: explicitCadenceLabel || scheduleLabel || explicitLabel,
+    label: explicitCadenceLabel || scheduleLabel || resetCadenceLabel || explicitLabel,
     windowMinutes,
     scheduleDurationMs,
     limit: safeLimit,
