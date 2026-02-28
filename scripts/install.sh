@@ -107,13 +107,13 @@ verify_archive_checksum_if_configured() {
 if [[ "${OMNI_CONNECTOR_INSTALLER_DRY_RUN:-0}" == "1" ]]; then
   print_step "Dry run enabled"
   if [[ -n "${install_target}" ]]; then
-    printf "Would run: npm install -g %s\n" "${install_target}"
+    printf "Would run: npm install -g --ignore-scripts %s\n" "${install_target}"
   else
     printf "Would download source archive: %s\n" "${archive_url}"
     if [[ -n "${archive_sha256}" ]]; then
       printf "Would verify SHA-256: %s\n" "${archive_sha256}"
     fi
-    printf "Would run: npm --prefix <source> install --include=dev --no-audit --no-fund\n"
+    printf "Would run: npm --prefix <source> install --include=dev --no-audit --no-fund --ignore-scripts\n"
     printf "Would run: npm --prefix <source> run build\n"
     printf "Would run: npm install -g --ignore-scripts <source>\n"
   fi
@@ -123,7 +123,7 @@ fi
 
 if [[ -n "${install_target}" ]]; then
   print_step "Installing omni-connector globally from ${install_target}"
-  npm install -g "${install_target}"
+  npm install -g --ignore-scripts "${install_target}"
 else
   print_step "Installing omni-connector from source archive"
 
@@ -152,10 +152,10 @@ else
     exit 1
   fi
 
-  npm --prefix "${source_dir}" install --include=dev --no-audit --no-fund
+  npm --prefix "${source_dir}" install --include=dev --no-audit --no-fund --ignore-scripts
   npm --prefix "${source_dir}" run build
 
-  package_archive_name="$(npm --prefix "${source_dir}" pack --silent --pack-destination "${tmp_dir}")"
+  package_archive_name="$(npm --prefix "${source_dir}" pack --silent --pack-destination "${tmp_dir}" --ignore-scripts)"
   package_archive_path="${tmp_dir}/${package_archive_name}"
   npm install -g --ignore-scripts "${package_archive_path}"
 fi

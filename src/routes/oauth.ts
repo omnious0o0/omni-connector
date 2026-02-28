@@ -8,6 +8,7 @@ import { ProviderId } from "../types";
 interface OAuthRouterDependencies {
   connectorService: ConnectorService;
   oauthProviderService: OAuthProviderService;
+  allowRemoteDashboard: boolean;
 }
 
 interface OAuthPendingFlowState {
@@ -91,8 +92,6 @@ function pruneVerificationFlows(
 function renderVerificationLaunchPage(verificationUrl: string, returnPath: string): string {
   const escapedVerificationUrl = escapeHtml(verificationUrl);
   const escapedReturnPath = escapeHtml(returnPath);
-  const verificationUrlJson = JSON.stringify(verificationUrl);
-  const returnPathJson = JSON.stringify(returnPath);
 
   return `<!doctype html>
 <html lang="en">
@@ -152,43 +151,30 @@ function renderVerificationLaunchPage(verificationUrl: string, returnPath: strin
       }
     </style>
   </head>
-  <body>
+  <body data-verification-url="${escapedVerificationUrl}" data-return-path="${escapedReturnPath}">
     <main class="panel">
       <h1>Finish account verification</h1>
-      <p id="verification-status">Opening Google verification now.</p>
+      <p id="verification-status" role="status" aria-live="polite" aria-atomic="true">Opening Google verification now.</p>
       <div class="actions">
         <a id="verification-open-link" class="btn" href="${escapedVerificationUrl}" target="_blank" rel="noopener noreferrer">Open verification page</a>
         <a id="verification-return-link" class="btn" href="${escapedReturnPath}">Return to omni-connector</a>
       </div>
     </main>
-    <script>
-      (() => {
-        const verificationUrl = ${verificationUrlJson};
-        const returnPath = ${returnPathJson};
-        const statusNode = document.getElementById("verification-status");
-        const popup = window.open(verificationUrl, "omni-connector-verification", "noopener,noreferrer");
-
-        if (!popup) {
-          if (statusNode) {
-            statusNode.textContent = "Popup was blocked. Open the verification page, finish it, then return here.";
-          }
-          return;
-        }
-
-        const monitor = () => {
-          if (popup.closed) {
-            window.location.replace(returnPath);
-            return;
-          }
-
-          window.setTimeout(monitor, 700);
-        };
-
-        monitor();
-      })();
-    </script>
+    <script src="/verification-launch.js" defer></script>
   </body>
 </html>`;
+}
+
+function assertVerificationSessionAuthorization(req: Request, allowRemoteDashboard: boolean): void {
+  if (!allowRemoteDashboard || req.session.dashboardAuthorized === true) {
+    return;
+  }
+
+  throw new HttpError(
+    401,
+    "dashboard_auth_required",
+    "Dashboard session authorization is required when ALLOW_REMOTE_DASHBOARD=true.",
+  );
 }
 
 function sanitizeOAuthErrorCode(rawCode: string): string {
@@ -289,6 +275,36 @@ function clearLegacyOAuthSessionState(req: Request): void {
   req.session.oauthCodeVerifier = undefined;
   req.session.oauthProviderId = undefined;
   req.session.oauthProfileId = undefined;
+}
+
+async function regenerateSession(req: Request): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    req.session.regenerate((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+interface DashboardSessionState {
+  oauthPendingFlows: Record<string, OAuthPendingFlowState>;
+  oauthLastCompletedState?: string;
+  verificationPendingFlows: Record<string, VerificationPendingFlowState>;
+  verificationLastCompletedState?: string;
+}
+
+async function elevateDashboardSession(req: Request, state: DashboardSessionState): Promise<void> {
+  await regenerateSession(req);
+  req.session.oauthPendingFlows = state.oauthPendingFlows;
+  req.session.oauthLastCompletedState = state.oauthLastCompletedState;
+  req.session.verificationPendingFlows = state.verificationPendingFlows;
+  req.session.verificationLastCompletedState = state.verificationLastCompletedState;
+  clearLegacyOAuthSessionState(req);
+  req.session.dashboardAuthorized = true;
 }
 
 export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router {
@@ -441,10 +457,12 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
 
     dependencies.connectorService.linkOAuthAccount(linkedAccount);
     delete pendingFlows[state];
-    req.session.oauthPendingFlows = pendingFlows;
-    req.session.oauthLastCompletedState = state;
-    clearLegacyOAuthSessionState(req);
-    req.session.dashboardAuthorized = true;
+    await elevateDashboardSession(req, {
+      oauthPendingFlows: pendingFlows,
+      oauthLastCompletedState: state,
+      verificationPendingFlows: pruneVerificationFlows(req.session.verificationPendingFlows),
+      verificationLastCompletedState: req.session.verificationLastCompletedState,
+    });
     res.redirect("/?connected=1");
   };
 
@@ -452,6 +470,8 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
   router.get("/oauth2callback", handleOAuthCallback);
 
   router.get("/verification/start", (req, res) => {
+    assertVerificationSessionAuthorization(req, dependencies.allowRemoteDashboard);
+
     const accountId = readQueryString(req.query.accountId);
     if (!accountId) {
       throw new HttpError(400, "missing_account_id", "Account ID is required.");
@@ -490,6 +510,8 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
   });
 
   router.get("/verification/complete", async (req, res) => {
+    assertVerificationSessionAuthorization(req, dependencies.allowRemoteDashboard);
+
     const state = readQueryString(req.query.state);
     if (!state) {
       throw new HttpError(400, "missing_verification_state", "Verification state is required.");
@@ -507,9 +529,12 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
     }
 
     delete pendingFlows[state];
-    req.session.verificationPendingFlows = pendingFlows;
-    req.session.verificationLastCompletedState = state;
-    req.session.dashboardAuthorized = true;
+    await elevateDashboardSession(req, {
+      oauthPendingFlows: prunePendingFlows(req.session.oauthPendingFlows),
+      oauthLastCompletedState: req.session.oauthLastCompletedState,
+      verificationPendingFlows: pendingFlows,
+      verificationLastCompletedState: state,
+    });
 
     try {
       await dependencies.connectorService.syncAccountStateNow();

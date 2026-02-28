@@ -332,7 +332,11 @@ export class DataStore {
 
   private encryptSecret(value: string): string {
     if (this.isEncryptedSecret(value)) {
-      return value;
+      try {
+        this.decryptSecret(value);
+        return value;
+      } catch {
+      }
     }
 
     const iv = crypto.randomBytes(12);

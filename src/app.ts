@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import express, { NextFunction, Request, Response } from "express";
 import session from "express-session";
+import createMemoryStore from "memorystore";
 import helmet from "helmet";
 import { AppConfig, resolveConfig } from "./config";
 import { isHttpError } from "./errors";
@@ -18,10 +19,12 @@ import { DataStore } from "./store";
 function isResolvedConfig(config: Partial<AppConfig>): config is AppConfig {
   return (
     typeof config.host === "string" &&
+    typeof config.trustProxyHops === "number" &&
     typeof config.port === "number" &&
     typeof config.dataFilePath === "string" &&
     typeof config.publicDir === "string" &&
     typeof config.sessionSecret === "string" &&
+    typeof config.sessionStore === "string" &&
     typeof config.oauthRedirectUri === "string" &&
     typeof config.oauthProviderName === "string" &&
     typeof config.oauthAuthorizationUrl === "string" &&
@@ -38,6 +41,72 @@ function isResolvedConfig(config: Partial<AppConfig>): config is AppConfig {
     typeof config.oauthProfiles === "object" &&
     config.oauthProfiles !== null
   );
+}
+
+function isLoopbackAddress(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    normalized === "127.0.0.1" ||
+    normalized.startsWith("::ffff:127.")
+  ) {
+    return true;
+  }
+
+  if (/^127\.(\d{1,3}\.){2}\d{1,3}$/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isTrustedProxyAddress(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (isLoopbackAddress(normalized)) {
+    return true;
+  }
+
+  const unwrappedV4 = normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(unwrappedV4);
+  if (ipv4Match) {
+    const octets = ipv4Match.slice(1).map((valuePart) => Number.parseInt(valuePart, 10));
+    if (octets.some((entry) => Number.isNaN(entry) || entry < 0 || entry > 255)) {
+      return false;
+    }
+
+    const a = octets[0] ?? 0;
+    const b = octets[1] ?? 0;
+    return (
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)
+    );
+  }
+
+  return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:");
+}
+
+function isLoopbackHostname(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized === "localhost") {
+    return true;
+  }
+
+  return isLoopbackAddress(normalized);
 }
 
 export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
@@ -62,8 +131,49 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
   );
 
   const app = express();
+  const MemoryStore = createMemoryStore(session);
+  const useMemorystore = config.sessionStore === "memorystore";
+  const sessionStore = useMemorystore
+    ? new MemoryStore({
+        checkPeriod: 24 * 60 * 60 * 1000,
+        ttl: 24 * 60 * 60,
+      })
+    : undefined;
+  const isProduction = (process.env.NODE_ENV ?? "").toLowerCase() === "production";
   app.disable("x-powered-by");
-  app.set("trust proxy", config.allowRemoteDashboard ? 1 : false);
+  const trustProxySetting = config.allowRemoteDashboard && config.trustProxyHops > 0 ? config.trustProxyHops : false;
+  app.set("trust proxy", trustProxySetting);
+
+  app.use((req, res, next) => {
+    if (!config.allowRemoteDashboard) {
+      next();
+      return;
+    }
+
+    const remoteAddress = req.socket.remoteAddress ?? "";
+    const requestHostname = req.hostname ?? "";
+
+    if (isLoopbackAddress(remoteAddress) && isLoopbackHostname(requestHostname)) {
+      next();
+      return;
+    }
+
+    if (req.secure && (trustProxySetting === false || isTrustedProxyAddress(remoteAddress))) {
+      next();
+      return;
+    }
+
+    const message = "HTTPS is required for non-loopback access when ALLOW_REMOTE_DASHBOARD=true.";
+    if (req.path.startsWith("/api/") || req.path.startsWith("/v1/")) {
+      res.status(400).json({
+        error: "https_required",
+        message,
+      });
+      return;
+    }
+
+    res.status(400).type("text/plain").send(message);
+  });
 
   app.use(
     helmet({
@@ -75,11 +185,21 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
           "style-src": ["'self'", "https://fonts.googleapis.com"],
           "font-src": ["'self'", "https://fonts.gstatic.com"],
           "script-src": ["'self'", "https://unpkg.com"],
+          "object-src": ["'none'"],
+          "base-uri": ["'self'"],
+          "form-action": ["'self'"],
+          "frame-ancestors": ["'none'"],
         },
       },
       crossOriginEmbedderPolicy: false,
     }),
   );
+
+  if (isProduction && !useMemorystore) {
+    process.stderr.write(
+      "[omni-connector] Using the default in-memory session store in production. Configure sticky sessions or an external shared store before scaling beyond a single process.\n",
+    );
+  }
 
   app.use(express.json({ limit: "300kb" }));
   app.use(express.urlencoded({ extended: false }));
@@ -88,12 +208,15 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
     session({
       name: "omni_connector_sid",
       secret: config.sessionSecret,
+      proxy: config.allowRemoteDashboard,
       resave: false,
       saveUninitialized: false,
+      unset: "destroy",
+      ...(sessionStore ? { store: sessionStore } : {}),
       cookie: {
         httpOnly: true,
         sameSite: "lax",
-        secure: config.allowRemoteDashboard ? "auto" : process.env.NODE_ENV === "production",
+        secure: config.allowRemoteDashboard ? "auto" : isProduction,
         maxAge: 24 * 60 * 60 * 1000,
       },
     }),
@@ -104,7 +227,11 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
     next();
   });
 
-  app.use(createOAuthRouter({ connectorService, oauthProviderService }));
+  app.use(createOAuthRouter({
+    connectorService,
+    oauthProviderService,
+    allowRemoteDashboard: config.allowRemoteDashboard,
+  }));
   app.use(
     "/api",
     createApiRouter({

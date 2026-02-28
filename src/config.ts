@@ -7,6 +7,8 @@ import { ProviderId } from "./types";
 
 export type ProviderUsageParser = "openai_usage" | "anthropic_usage" | "json_totals";
 export type ProviderUsageAuthMode = "bearer" | "x-api-key" | "query-api-key";
+export type SessionStoreMode = "memory" | "memorystore";
+const MIN_SESSION_SECRET_BYTES = 16;
 
 export interface ProviderUsageConfig {
   parser: ProviderUsageParser;
@@ -37,11 +39,13 @@ export interface OAuthProviderProfileConfig {
 export interface AppConfig {
   host: string;
   allowRemoteDashboard: boolean;
+  trustProxyHops: number;
   strictLiveQuota: boolean;
   port: number;
   dataFilePath: string;
   publicDir: string;
   sessionSecret: string;
+  sessionStore: SessionStoreMode;
   oauthRedirectUri: string;
   oauthProviderName: string;
   oauthAuthorizationUrl: string;
@@ -820,10 +824,18 @@ function resolveSessionSecretFilePath(rawValue: string | undefined, dataFilePath
   return `${dataFilePath}.session`;
 }
 
+function assertSessionSecretStrength(secret: string, source: string): string {
+  if (Buffer.byteLength(secret, "utf8") < MIN_SESSION_SECRET_BYTES) {
+    throw new Error(`${source} must be at least ${MIN_SESSION_SECRET_BYTES} bytes long.`);
+  }
+
+  return secret;
+}
+
 function resolveSessionSecret(rawValue: string | undefined, sessionSecretFilePath: string): string {
   const secret = rawValue?.trim();
   if (secret) {
-    return secret;
+    return assertSessionSecretStrength(secret, "SESSION_SECRET");
   }
 
   if (fs.existsSync(sessionSecretFilePath)) {
@@ -832,7 +844,7 @@ function resolveSessionSecret(rawValue: string | undefined, sessionSecretFilePat
       throw new Error(`SESSION_SECRET file is empty at ${sessionSecretFilePath}.`);
     }
 
-    return storedSecret;
+    return assertSessionSecretStrength(storedSecret, `SESSION_SECRET file at ${sessionSecretFilePath}`);
   }
 
   const generatedSecret = crypto.randomBytes(32).toString("base64url");
@@ -851,7 +863,7 @@ function resolveSessionSecret(rawValue: string | undefined, sessionSecretFilePat
     }
   }
 
-  return generatedSecret;
+  return assertSessionSecretStrength(generatedSecret, "generated session secret");
 }
 
 export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -861,6 +873,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const sessionSecretFilePath = resolveSessionSecretFilePath(env.SESSION_SECRET_FILE, dataFilePath);
   const host = parseHost(env.HOST);
   const allowRemoteDashboard = parseBoolean(env.ALLOW_REMOTE_DASHBOARD, false);
+  const trustProxyHops = parseNonNegativeInt(env.TRUST_PROXY_HOPS, 0);
   const strictLiveQuota = parseBoolean(env.STRICT_LIVE_QUOTA, false);
   const providerInferenceBaseUrls = parseProviderInferenceBaseUrls(env);
   const codexChatgptBaseUrl = parseRequiredUrl(
@@ -884,11 +897,17 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     host,
     allowRemoteDashboard,
+    trustProxyHops,
     strictLiveQuota,
     port,
     dataFilePath,
     publicDir,
     sessionSecret: resolveSessionSecret(env.SESSION_SECRET, sessionSecretFilePath),
+    sessionStore: parseEnumValue<SessionStoreMode>(
+      env.SESSION_STORE,
+      ["memory", "memorystore"],
+      "memorystore",
+    ),
     oauthRedirectUri,
     oauthProviderName: nonEmptyEnvValue(env.OAUTH_PROVIDER_NAME) ?? "OpenAI",
     oauthAuthorizationUrl: parseRequiredUrl(

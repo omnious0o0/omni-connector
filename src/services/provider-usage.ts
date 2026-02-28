@@ -264,7 +264,7 @@ function ensureHttpsUrl(rawUrl: string): string {
     parsed.hostname !== "localhost" &&
     parsed.hostname !== "127.0.0.1"
   ) {
-    throw new HttpError(500, "invalid_usage_url", `Usage URL must use HTTPS: ${rawUrl}`);
+    throw new HttpError(500, "invalid_usage_url", "Usage URL must use HTTPS.");
   }
 
   return parsed.toString();
