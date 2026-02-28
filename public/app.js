@@ -110,6 +110,7 @@ let connectedProviderModelsPayload = {
   providers: [],
 };
 let connectedProviderModelsError = null;
+let quotaCadenceConsensusByScope = new Map();
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -1047,22 +1048,56 @@ function cadenceLabelFromText(value) {
   return "";
 }
 
-function cadenceLabelFromResetAt(resetIso) {
-  if (typeof resetIso !== "string" || resetIso.trim().length === 0) {
-    return "";
+function cadenceMinutesFromLabel(cadenceLabel) {
+  if (typeof cadenceLabel !== "string") {
+    return null;
   }
 
-  const resetMs = Date.parse(resetIso);
-  if (!Number.isFinite(resetMs)) {
-    return "";
+  const token = cadenceLabel.trim().toLowerCase();
+  const tokenMatch = /^(\d+)\s*(m|h|d|w)$/.exec(token);
+  if (!tokenMatch) {
+    return null;
   }
 
-  const remainingMs = resetMs - Date.now();
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
-    return "";
+  const amount = Number(tokenMatch[1]);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
   }
 
-  return compactDurationLabel(remainingMs) ?? "";
+  const unit = tokenMatch[2];
+  if (unit === "m") {
+    return Math.max(1, Math.round(amount));
+  }
+
+  if (unit === "h") {
+    return Math.max(1, Math.round(amount * 60));
+  }
+
+  if (unit === "d") {
+    return Math.max(1, Math.round(amount * 24 * 60));
+  }
+
+  if (unit === "w") {
+    return Math.max(1, Math.round(amount * 7 * 24 * 60));
+  }
+
+  return null;
+}
+
+function authoritativeCadenceMinutes(windowData, quotaSyncedAt) {
+  const rawWindowMinutes = Number(windowData?.windowMinutes);
+  if (Number.isFinite(rawWindowMinutes) && rawWindowMinutes > 0) {
+    return Math.max(1, Math.round(rawWindowMinutes));
+  }
+
+  const scheduleDurationMs = inferredScheduleDurationMs(windowData, quotaSyncedAt);
+  if (Number.isFinite(scheduleDurationMs) && scheduleDurationMs > 0) {
+    return Math.max(1, Math.round(scheduleDurationMs / 60_000));
+  }
+
+  const explicitLabel = normalizeQuotaLabel(windowData?.label);
+  const explicitCadenceLabel = cadenceLabelFromText(explicitLabel);
+  return cadenceMinutesFromLabel(explicitCadenceLabel);
 }
 
 function normalizeQuotaLabel(labelValue) {
@@ -1119,41 +1154,104 @@ function inferredScheduleDurationMs(windowData, quotaSyncedAt) {
   return null;
 }
 
-function quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt) {
-  const rawWindowMinutes = Number(windowData?.windowMinutes);
-  if (Number.isFinite(rawWindowMinutes) && rawWindowMinutes > 0) {
-    const cadenceFromMinutes = cadenceLabelFromMinutes(rawWindowMinutes);
-    if (cadenceFromMinutes.length > 0) {
-      return cadenceFromMinutes;
-    }
-  }
-
-  const scheduleDurationMs = inferredScheduleDurationMs(windowData, quotaSyncedAt);
-  if (Number.isFinite(scheduleDurationMs) && scheduleDurationMs > 0) {
-    const durationLabel = cadenceLabelFromMinutes(Math.round(scheduleDurationMs / 60_000));
-    if (durationLabel.length > 0) {
-      return durationLabel;
-    }
-  }
-
-  if (typeof fallbackLabel === "string" && fallbackLabel.trim().length > 0) {
-    return fallbackLabel.trim();
-  }
-
-  return "";
+function cadenceScopeKey(account, slot) {
+  const providerId = typeof account?.provider === "string" ? account.provider.trim().toLowerCase() : "unknown";
+  const authMethod = normalizedAccountAuthMethod(account?.authMethod);
+  const oauthProfileKey = (normalizedOAuthProfileId(account?.oauthProfileId) ?? "none").toLowerCase();
+  return `${providerId}|${authMethod}|${oauthProfileKey}|${slot}`;
 }
 
-function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
+function buildCadenceConsensusByScope(accounts) {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return new Map();
+  }
+
+  const countsByScope = new Map();
+  for (const account of accounts) {
+    const quotaSyncedAt = typeof account?.quotaSyncedAt === "string" ? account.quotaSyncedAt : null;
+    const windowsBySlot = [
+      ["fiveHour", account?.quota?.fiveHour],
+      ["weekly", account?.quota?.weekly],
+    ];
+
+    for (const [slot, windowData] of windowsBySlot) {
+      const cadenceMinutes = authoritativeCadenceMinutes(windowData, quotaSyncedAt);
+      if (!Number.isFinite(cadenceMinutes) || cadenceMinutes === null || cadenceMinutes <= 0) {
+        continue;
+      }
+
+      const scopeKey = cadenceScopeKey(account, slot);
+      let minuteCounts = countsByScope.get(scopeKey);
+      if (!(minuteCounts instanceof Map)) {
+        minuteCounts = new Map();
+        countsByScope.set(scopeKey, minuteCounts);
+      }
+
+      minuteCounts.set(cadenceMinutes, (minuteCounts.get(cadenceMinutes) ?? 0) + 1);
+    }
+  }
+
+  const consensusByScope = new Map();
+  for (const [scopeKey, minuteCounts] of countsByScope.entries()) {
+    if (!(minuteCounts instanceof Map) || minuteCounts.size !== 1) {
+      continue;
+    }
+
+    const [minutes] = minuteCounts.keys();
+    if (Number.isFinite(minutes) && minutes > 0) {
+      consensusByScope.set(scopeKey, Math.round(minutes));
+    }
+  }
+
+  return consensusByScope;
+}
+
+function consensusCadenceMinutes(account, slot) {
+  if (!(quotaCadenceConsensusByScope instanceof Map)) {
+    return null;
+  }
+
+  const scopeKey = cadenceScopeKey(account, slot);
+  const minutes = Number(quotaCadenceConsensusByScope.get(scopeKey));
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return null;
+  }
+
+  return Math.round(minutes);
+}
+
+function resolveQuotaWindowLabel(account, slot, windowView) {
+  const cadenceLabel = typeof windowView?.cadenceLabel === "string" ? windowView.cadenceLabel.trim() : "";
+  if (cadenceLabel.length > 0) {
+    return cadenceLabel;
+  }
+
+  const consensusMinutes = consensusCadenceMinutes(account, slot);
+  if (consensusMinutes !== null) {
+    const consensusLabel = cadenceLabelFromMinutes(consensusMinutes);
+    if (consensusLabel.length > 0) {
+      return consensusLabel;
+    }
+  }
+
+  const explicitLabel = typeof windowView?.explicitLabel === "string" ? windowView.explicitLabel.trim() : "";
+  if (explicitLabel.length > 0) {
+    return explicitLabel;
+  }
+
+  return "Quota";
+}
+
+function buildQuotaWindowView(windowData, quotaSyncedAt) {
   const presentation = quotaWindowPresentation(windowData);
   const rawWindowMinutes = Number(windowData?.windowMinutes);
   const windowMinutes = Number.isFinite(rawWindowMinutes) && rawWindowMinutes > 0 ? Math.round(rawWindowMinutes) : null;
   const inferredDurationMs = inferredScheduleDurationMs(windowData, quotaSyncedAt);
   const scheduleDurationMs =
     windowMinutes !== null ? windowMinutes * 60_000 : Number.isFinite(inferredDurationMs) ? inferredDurationMs : null;
+  const cadenceMinutes = authoritativeCadenceMinutes(windowData, quotaSyncedAt);
+  const cadenceLabel = cadenceMinutes !== null ? cadenceLabelFromMinutes(cadenceMinutes) : "";
   const explicitLabel = normalizeQuotaLabel(windowData?.label);
-  const explicitCadenceLabel = cadenceLabelFromText(explicitLabel);
-  const scheduleLabel = quotaWindowScheduleLabel(windowData, fallbackLabel, quotaSyncedAt);
-  const resetCadenceLabel = cadenceLabelFromResetAt(presentation.resetAt);
   const limit = Number(windowData?.limit);
   const used = Number(windowData?.used);
   const remaining = Number(windowData?.remaining);
@@ -1163,7 +1261,10 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
 
   return {
     ...presentation,
-    label: explicitCadenceLabel || scheduleLabel || resetCadenceLabel || explicitLabel,
+    label: cadenceLabel || explicitLabel,
+    explicitLabel,
+    cadenceLabel,
+    cadenceMinutes,
     windowMinutes,
     scheduleDurationMs,
     limit: safeLimit,
@@ -1173,25 +1274,36 @@ function buildQuotaWindowView(windowData, fallbackLabel, quotaSyncedAt) {
 }
 
 function quotaWindowSignature(windowView) {
+  const cadenceKey = Number.isFinite(windowView.cadenceMinutes) ? Math.round(windowView.cadenceMinutes) : "na";
   const minutesKey = Number.isFinite(windowView.windowMinutes) ? Math.round(windowView.windowMinutes) : "na";
   const scheduleKey =
     Number.isFinite(windowView.scheduleDurationMs) && windowView.scheduleDurationMs !== null
       ? Math.round(windowView.scheduleDurationMs / 60_000)
       : "na";
-  const resetKey = typeof windowView.resetAt === "string" ? windowView.resetAt : "na";
   const labelKey = typeof windowView.label === "string" ? windowView.label : "na";
+  const resetKey = typeof windowView.resetAt === "string" ? windowView.resetAt : "na";
   const ratioKey = Math.round(windowView.ratio * 1000);
   const limitKey = Math.round(windowView.limit * 1000);
   const usedKey = Math.round(windowView.used * 1000);
-  return `${minutesKey}|${scheduleKey}|${labelKey}|${resetKey}|${ratioKey}|${limitKey}|${usedKey}`;
+  return `${cadenceKey}|${minutesKey}|${scheduleKey}|${labelKey}|${resetKey}|${ratioKey}|${limitKey}|${usedKey}`;
 }
 
 function normalizedAccountQuotaWindows(account) {
   const quotaSyncedAt = typeof account?.quotaSyncedAt === "string" ? account.quotaSyncedAt : null;
   const candidates = [
-    buildQuotaWindowView(account?.quota?.fiveHour, null, quotaSyncedAt),
-    buildQuotaWindowView(account?.quota?.weekly, null, quotaSyncedAt),
-  ];
+    {
+      slot: "fiveHour",
+      windowView: buildQuotaWindowView(account?.quota?.fiveHour, quotaSyncedAt),
+    },
+    {
+      slot: "weekly",
+      windowView: buildQuotaWindowView(account?.quota?.weekly, quotaSyncedAt),
+    },
+  ].map(({ slot, windowView }) => ({
+    ...windowView,
+    slot,
+    label: resolveQuotaWindowLabel(account, slot, windowView),
+  }));
 
   const seen = new Set();
   const deduped = [];
@@ -1418,6 +1530,7 @@ function buildDashboardWindowMetrics(accounts) {
   for (const account of accounts) {
     const windows = normalizedAccountQuotaWindows(account);
     for (const windowView of windows) {
+      const slot = windowView.slot === "weekly" ? "weekly" : "fiveHour";
       const scheduleDurationMs =
         Number.isFinite(windowView.scheduleDurationMs) && windowView.scheduleDurationMs !== null
           ? Math.round(windowView.scheduleDurationMs)
@@ -1426,11 +1539,17 @@ function buildDashboardWindowMetrics(accounts) {
         Number.isFinite(windowView.windowMinutes) && windowView.windowMinutes !== null
           ? Math.round(windowView.windowMinutes)
           : null;
-      const scheduleKey = `${windowMinutes ?? "na"}|${scheduleDurationMs ?? "na"}|${windowView.label}`;
+      const cadenceMinutes =
+        Number.isFinite(windowView.cadenceMinutes) && windowView.cadenceMinutes !== null
+          ? Math.round(windowView.cadenceMinutes)
+          : null;
+      const scheduleKey = `${slot}|${cadenceMinutes ?? "na"}|${windowMinutes ?? "na"}|${scheduleDurationMs ?? "na"}`;
 
       let bucket = buckets.get(scheduleKey);
       if (!bucket) {
         bucket = {
+          slot,
+          cadenceMinutes,
           windowMinutes,
           scheduleDurationMs,
           labelCounts: new Map(),
@@ -1440,6 +1559,10 @@ function buildDashboardWindowMetrics(accounts) {
           ratioCount: 0,
         };
         buckets.set(scheduleKey, bucket);
+      }
+
+      if (bucket.cadenceMinutes === null && cadenceMinutes !== null) {
+        bucket.cadenceMinutes = cadenceMinutes;
       }
 
       bucket.labelCounts.set(windowView.label, (bucket.labelCounts.get(windowView.label) ?? 0) + 1);
@@ -1466,7 +1589,9 @@ function buildDashboardWindowMetrics(accounts) {
             : 0;
 
       return {
+        slot: bucket.slot,
         label: mostFrequentLabel(bucket.labelCounts, ""),
+        cadenceMinutes: bucket.cadenceMinutes,
         windowMinutes: bucket.windowMinutes,
         scheduleDurationMs: bucket.scheduleDurationMs,
         remainingPercent,
@@ -1487,6 +1612,14 @@ function buildDashboardWindowMetrics(accounts) {
 }
 
 function metricCadenceLabel(metric) {
+  const rawCadenceMinutes = Number(metric?.cadenceMinutes);
+  if (Number.isFinite(rawCadenceMinutes) && rawCadenceMinutes > 0) {
+    const cadenceLabel = cadenceLabelFromMinutes(rawCadenceMinutes);
+    if (cadenceLabel.length > 0) {
+      return cadenceLabel;
+    }
+  }
+
   const rawWindowMinutes = Number(metric?.windowMinutes);
   if (Number.isFinite(rawWindowMinutes) && rawWindowMinutes > 0) {
     const minutesLabel = cadenceLabelFromMinutes(rawWindowMinutes);
@@ -1920,6 +2053,7 @@ async function loadConnectedProviderModels() {
 
 function renderDashboard(data) {
   dashboard = data;
+  quotaCadenceConsensusByScope = buildCadenceConsensusByScope(data.accounts);
   dashboardLoaded = true;
   statusError = false;
   dashboardAuthorized = Boolean(data.dashboardAuthorized);

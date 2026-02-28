@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 import { normalizeAccountQuota, remainingQuota, toDashboardAccount } from "../src/services/quota";
 import { ConnectedAccount } from "../src/types";
 
@@ -75,4 +78,257 @@ test("dashboard keeps five-hour and weekly remaining independent", () => {
   assert.equal(dashboardAccount.quota.weekly.remaining, 5);
   assert.equal(dashboardAccount.quota.fiveHour.remaining, 100);
   assert.equal(dashboardAccount.quota.fiveHour.remainingRatio, 1);
+});
+
+type AppContext = vm.Context & {
+  authoritativeCadenceMinutes: (windowData: unknown, quotaSyncedAt: unknown) => number | null;
+  buildCadenceConsensusByScope: (accounts: unknown[]) => Map<string, number>;
+  buildQuotaWindowView: (windowData: unknown, quotaSyncedAt: unknown) => Record<string, unknown>;
+  normalizedAccountQuotaWindows: (account: unknown) => unknown[];
+  resolveQuotaWindowLabel: (account: unknown, slot: string, windowView: unknown) => string;
+  quotaWindowSignature: (windowView: unknown) => string;
+  __consensus?: Map<string, number>;
+};
+
+function loadFrontendAppContext(): AppContext {
+  class HTMLElement {}
+  class HTMLInputElement extends HTMLElement {}
+  class HTMLButtonElement extends HTMLElement {}
+  class HTMLFormElement extends HTMLElement {}
+  class HTMLAnchorElement extends HTMLElement {}
+  class HTMLSelectElement extends HTMLElement {}
+  class HTMLTextAreaElement extends HTMLElement {}
+
+  const documentStub = {
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => undefined,
+    activeElement: null,
+  };
+
+  const windowStub = {
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    matchMedia: () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
+    lucide: null,
+  };
+
+  const contextObject: Record<string, unknown> = {
+    console,
+    document: documentStub,
+    window: windowStub,
+    localStorage: {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    },
+    navigator: {
+      clipboard: {
+        writeText: async () => undefined,
+      },
+    },
+    location: {
+      search: "",
+      hash: "",
+    },
+    history: {
+      replaceState: () => undefined,
+      pushState: () => undefined,
+    },
+    fetch: async () => ({
+      ok: false,
+      headers: { get: () => "application/json" },
+      json: async () => ({ message: "request failed" }),
+      text: async () => "",
+    }),
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    URL,
+    URLSearchParams,
+    Date,
+    Math,
+    Number,
+    String,
+    Boolean,
+    Array,
+    Object,
+    RegExp,
+    Promise,
+    parseInt,
+    parseFloat,
+    encodeURIComponent,
+    decodeURIComponent,
+    HTMLElement,
+    HTMLInputElement,
+    HTMLButtonElement,
+    HTMLFormElement,
+    HTMLAnchorElement,
+    HTMLSelectElement,
+    HTMLTextAreaElement,
+  };
+
+  Object.assign(windowStub, {
+    document: documentStub,
+    navigator: contextObject.navigator,
+    location: contextObject.location,
+    history: contextObject.history,
+    fetch: contextObject.fetch,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  });
+
+  const context = vm.createContext(contextObject) as AppContext;
+  const appScriptPath = path.join(process.cwd(), "public", "app.js");
+  const appScriptSource = fs.readFileSync(appScriptPath, "utf8");
+  vm.runInContext(appScriptSource, context, { filename: appScriptPath });
+  return context;
+}
+
+function geminiQuotaFixture(params: {
+  oauthProfileId: string;
+  quotaSyncedAt: string;
+  fiveHourWindowMinutes: number | null;
+  weeklyWindowMinutes: number | null;
+  resetIso: string;
+}) {
+  return {
+    provider: "gemini",
+    authMethod: "oauth",
+    oauthProfileId: params.oauthProfileId,
+    quotaSyncedAt: params.quotaSyncedAt,
+    quota: {
+      fiveHour: {
+        limit: 100,
+        used: 0,
+        remaining: 100,
+        remainingRatio: 1,
+        label: null,
+        windowMinutes: params.fiveHourWindowMinutes,
+        windowStartedAt: params.quotaSyncedAt,
+        resetsAt: params.resetIso,
+      },
+      weekly: {
+        limit: 100,
+        used: 0,
+        remaining: 100,
+        remainingRatio: 1,
+        label: null,
+        windowMinutes: params.weeklyWindowMinutes,
+        windowStartedAt: params.quotaSyncedAt,
+        resetsAt: params.resetIso,
+      },
+    },
+  };
+}
+
+test("frontend cadence resolver ignores reset countdown from synthetic starts", () => {
+  const context = loadFrontendAppContext();
+
+  const cadenceMinutes = context.authoritativeCadenceMinutes(
+    {
+      label: null,
+      windowMinutes: null,
+      windowStartedAt: "2026-02-28T05:00:00.000Z",
+      resetsAt: "2026-02-28T05:20:00.000Z",
+    },
+    "2026-02-28T05:00:00.000Z",
+  );
+
+  assert.equal(cadenceMinutes, null);
+});
+
+test("frontend consensus fills missing cadence labels within provider profile scope", () => {
+  const context = loadFrontendAppContext();
+
+  const knownCadence = geminiQuotaFixture({
+    oauthProfileId: "gemini-cli",
+    quotaSyncedAt: "2026-02-28T05:00:00.000Z",
+    fiveHourWindowMinutes: 1440,
+    weeklyWindowMinutes: 1440,
+    resetIso: "2026-03-01T05:00:00.000Z",
+  });
+  const missingCadence = geminiQuotaFixture({
+    oauthProfileId: "gemini-cli",
+    quotaSyncedAt: "2026-02-28T05:00:00.000Z",
+    fiveHourWindowMinutes: null,
+    weeklyWindowMinutes: null,
+    resetIso: "2026-02-28T05:20:00.000Z",
+  });
+
+  const consensus = context.buildCadenceConsensusByScope([knownCadence, missingCadence]);
+  assert.equal(consensus.get("gemini|oauth|gemini-cli|fiveHour"), 1440);
+  assert.equal(consensus.get("gemini|oauth|gemini-cli|weekly"), 1440);
+
+  context.__consensus = consensus;
+  vm.runInContext("quotaCadenceConsensusByScope = __consensus;", context);
+
+  const unresolvedWindow = context.buildQuotaWindowView(
+    missingCadence.quota.fiveHour,
+    missingCadence.quotaSyncedAt,
+  );
+  const resolvedLabel = context.resolveQuotaWindowLabel(missingCadence, "fiveHour", unresolvedWindow);
+  assert.equal(resolvedLabel, "1d");
+});
+
+test("frontend quota signature collapses slot-only duplicate windows", () => {
+  const context = loadFrontendAppContext();
+  const baseWindow = {
+    slot: "fiveHour",
+    windowMinutes: 1440,
+    cadenceMinutes: 1440,
+    label: "1d",
+    scheduleDurationMs: 1440 * 60_000,
+    resetAt: "2026-03-01T05:00:00.000Z",
+    ratio: 1,
+    limit: 100,
+    used: 0,
+  };
+
+  const fiveHourSignature = context.quotaWindowSignature(baseWindow);
+  const weeklySignature = context.quotaWindowSignature({ ...baseWindow, slot: "weekly" });
+  assert.equal(fiveHourSignature, weeklySignature);
+});
+
+test("frontend normalized windows render one or two fields based on unique windows", () => {
+  const context = loadFrontendAppContext();
+
+  const duplicateWindowAccount = geminiQuotaFixture({
+    oauthProfileId: "gemini-cli",
+    quotaSyncedAt: "2026-02-28T05:00:00.000Z",
+    fiveHourWindowMinutes: 1440,
+    weeklyWindowMinutes: 1440,
+    resetIso: "2026-03-01T05:00:00.000Z",
+  });
+
+  const distinctWindowAccount = {
+    ...duplicateWindowAccount,
+    quota: {
+      fiveHour: {
+        ...duplicateWindowAccount.quota.fiveHour,
+        windowMinutes: 300,
+        resetsAt: "2026-02-28T10:00:00.000Z",
+      },
+      weekly: {
+        ...duplicateWindowAccount.quota.weekly,
+        windowMinutes: 10080,
+        resetsAt: "2026-03-07T05:00:00.000Z",
+      },
+    },
+  };
+
+  const deduped = context.normalizedAccountQuotaWindows(duplicateWindowAccount);
+  const distinct = context.normalizedAccountQuotaWindows(distinctWindowAccount);
+
+  assert.equal(Array.isArray(deduped), true);
+  assert.equal(Array.isArray(distinct), true);
+  assert.equal(deduped.length, 1);
+  assert.equal(distinct.length, 2);
 });
