@@ -23,6 +23,20 @@ function shouldIgnoreChmodError(error: unknown): boolean {
   return code === "EPERM" || code === "ENOSYS" || code === "EINVAL";
 }
 
+function assertSecretFilePermissions(filePath: string, label: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const stats = fs.statSync(filePath);
+  const mode = stats.mode & 0o777;
+  const ownerReadable = (mode & 0o400) !== 0;
+  const groupOrWorldAccessible = (mode & 0o077) !== 0;
+  if (!ownerReadable || groupOrWorldAccessible) {
+    throw new Error(`${label} at ${filePath} must be owner-readable and not accessible by group or others.`);
+  }
+}
+
 export function createConnectorApiKey(): string {
   return `omni-${crypto.randomBytes(24).toString("hex")}`;
 }
@@ -283,6 +297,7 @@ export class DataStore {
     }
 
     if (fs.existsSync(this.keyPath)) {
+      assertSecretFilePermissions(this.keyPath, "Data encryption key file");
       this.warnMissingEnvKeyForProduction();
       const fileContents = fs.readFileSync(this.keyPath, "utf8");
       const decoded = decodeSecretKey(fileContents);

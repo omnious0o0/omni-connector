@@ -80,21 +80,32 @@ function parseHost(rawValue: string | undefined): string {
   return value;
 }
 
-function isLoopbackHost(host: string): boolean {
+export function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
   if (!normalized) {
     return false;
   }
 
-  if (normalized === "localhost" || normalized === "::1" || normalized === "[::1]") {
+  const unwrapped = normalized.startsWith("[") && normalized.endsWith("]")
+    ? normalized.slice(1, -1)
+    : normalized;
+
+  if (unwrapped === "localhost" || unwrapped === "::1") {
     return true;
   }
 
-  if (/^127\.(\d{1,3}\.){2}\d{1,3}$/.test(normalized)) {
-    return true;
+  const mappedV4 = unwrapped.startsWith("::ffff:") ? unwrapped.slice("::ffff:".length) : unwrapped;
+  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(mappedV4);
+  if (!ipv4Match) {
+    return false;
   }
 
-  return normalized === "127.0.0.1";
+  const octets = ipv4Match.slice(1).map((part) => Number.parseInt(part, 10));
+  if (octets.some((octet) => Number.isNaN(octet) || octet < 0 || octet > 255)) {
+    return false;
+  }
+
+  return octets[0] === 127;
 }
 
 function parsePort(rawValue: string | undefined): number {
@@ -280,6 +291,20 @@ function errnoCode(error: unknown): string | null {
 function shouldIgnoreChmodError(error: unknown): boolean {
   const code = errnoCode(error);
   return code === "EPERM" || code === "ENOSYS" || code === "EINVAL";
+}
+
+function assertSecretFilePermissions(filePath: string, label: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const stats = fs.statSync(filePath);
+  const mode = stats.mode & 0o777;
+  const ownerReadable = (mode & 0o400) !== 0;
+  const groupOrWorldAccessible = (mode & 0o077) !== 0;
+  if (!ownerReadable || groupOrWorldAccessible) {
+    throw new Error(`${label} at ${filePath} must be owner-readable and not accessible by group or others.`);
+  }
 }
 
 interface ProviderUsageDefaults {
@@ -839,6 +864,7 @@ function resolveSessionSecret(rawValue: string | undefined, sessionSecretFilePat
   }
 
   if (fs.existsSync(sessionSecretFilePath)) {
+    assertSecretFilePermissions(sessionSecretFilePath, "SESSION_SECRET file");
     const storedSecret = fs.readFileSync(sessionSecretFilePath, "utf8").trim();
     if (!storedSecret) {
       throw new Error(`SESSION_SECRET file is empty at ${sessionSecretFilePath}.`);

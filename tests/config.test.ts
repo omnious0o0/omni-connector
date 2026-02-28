@@ -202,6 +202,20 @@ test("requires loopback OAuth redirect URI when remote dashboard is disabled", (
   );
 });
 
+test("does not treat spoofed 127 hostnames as loopback", () => {
+  assert.throws(
+    () =>
+      resolveConfig({
+        HOST: "127.0.0.1",
+        PORT: "1455",
+        SESSION_SECRET: "test-session-secret",
+        PUBLIC_DIR: path.join(process.cwd(), "public"),
+        OAUTH_REDIRECT_URI: "http://127.evil.com/auth/callback",
+      }),
+    /OAUTH_REDIRECT_URI must use a loopback host unless ALLOW_REMOTE_DASHBOARD=true/,
+  );
+});
+
 test("requires HTTPS OAuth redirect URI for remote non-loopback hosts", () => {
   assert.throws(
     () =>
@@ -287,7 +301,13 @@ test("rejects weak SESSION_SECRET values loaded from file", () => {
   try {
     const dataFilePath = path.join(directory, "store.json");
     const sessionSecretFilePath = `${dataFilePath}.session`;
-    fs.writeFileSync(sessionSecretFilePath, "tiny", "utf8");
+    fs.writeFileSync(sessionSecretFilePath, "tiny", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    if (process.platform !== "win32") {
+      fs.chmodSync(sessionSecretFilePath, 0o600);
+    }
 
     assert.throws(
       () =>
@@ -303,6 +323,37 @@ test("rejects weak SESSION_SECRET values loaded from file", () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test(
+  "rejects permissive SESSION_SECRET file permissions",
+  { skip: process.platform === "win32" },
+  () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omni-config-session-mode-"));
+
+    try {
+      const dataFilePath = path.join(directory, "store.json");
+      const sessionSecretFilePath = `${dataFilePath}.session`;
+      fs.writeFileSync(sessionSecretFilePath, "this-is-a-very-strong-session-secret-value", {
+        encoding: "utf8",
+        mode: 0o644,
+      });
+      fs.chmodSync(sessionSecretFilePath, 0o644);
+
+      assert.throws(
+        () =>
+          resolveConfig({
+            HOST: "127.0.0.1",
+            PORT: "1455",
+            DATA_FILE: dataFilePath,
+            PUBLIC_DIR: path.join(process.cwd(), "public"),
+          }),
+        /SESSION_SECRET file .* must be owner-readable and not accessible by group or others/,
+      );
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("defaults TRUST_PROXY_HOPS to 0 and parses valid values", () => {
   const defaultConfig = resolveConfig({
