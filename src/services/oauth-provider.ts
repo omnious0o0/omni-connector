@@ -127,6 +127,21 @@ function pickString(record: Record<string, unknown>, keys: string[]): string | u
   return undefined;
 }
 
+function sanitizeOAuthDetail(value: string): string {
+  return value
+    .replace(
+      /([?&](?:key|api_key|apikey|token|access_token|refresh_token|client_secret|clientsecret|id_token|idtoken)=)([^&\s]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]")
+    .replace(/(\bBasic\s+)[A-Za-z0-9+/=._~-]+/gi, "$1[redacted]")
+    .replace(
+      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|id[_-]?token|authorization)["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+      "$1[redacted]",
+    )
+    .slice(0, 280);
+}
+
 function oauthErrorSummary(record: Record<string, unknown>): string | null {
   const errorRecord = asRecord(record.error);
   const errorCode =
@@ -140,14 +155,14 @@ function oauthErrorSummary(record: Record<string, unknown>): string | null {
     null;
 
   if (errorCode && errorDescription) {
-    return `${errorCode}: ${errorDescription}`;
+    return `${sanitizeOAuthDetail(errorCode)}: ${sanitizeOAuthDetail(errorDescription)}`;
   }
 
   if (errorDescription) {
-    return errorDescription;
+    return sanitizeOAuthDetail(errorDescription);
   }
 
-  return errorCode;
+  return errorCode ? sanitizeOAuthDetail(errorCode) : null;
 }
 
 function pickNumber(record: Record<string, unknown>, keys: string[]): number | undefined {

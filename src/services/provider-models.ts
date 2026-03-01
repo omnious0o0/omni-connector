@@ -68,8 +68,14 @@ function sanitizeExternalErrorMessage(rawMessage: string, fallback: string): str
   }
 
   const redacted = normalized
-    .replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi, "$1[redacted]")
-    .replace(/(\b(?:key|api_key|apikey|token|access_token|refresh_token)=)([^\s&]+)/gi, "$1[redacted]")
+    .replace(
+      /([?&](?:key|api_key|apikey|token|access_token|refresh_token|client_secret|clientsecret|id_token|idtoken)=)([^&\s]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /(\b(?:key|api_key|apikey|token|access_token|refresh_token|client_secret|clientsecret|id_token|idtoken)=)([^\s&]+)/gi,
+      "$1[redacted]",
+    )
     .replace(/(\bBearer\s+)[A-Za-z0-9._~-]{10,}/gi, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|xox[baprs]-[A-Za-z0-9-]+)\b/g, "[redacted]");
 

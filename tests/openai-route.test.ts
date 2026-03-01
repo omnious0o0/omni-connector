@@ -907,7 +907,7 @@ test("redacts sensitive provider failure messages in OpenAI error responses", as
     responseBody: {
       error: {
         message:
-          "Bearer sk-this-should-never-leak and token=secret-token-value and api_key=abc123 should be redacted",
+          "Bearer sk-this-should-never-leak and token=secret-token-value and api_key=abc123 and client_secret=super-secret-client and id_token=super-secret-id should be redacted",
       },
     },
   });
@@ -967,6 +967,8 @@ test("redacts sensitive provider failure messages in OpenAI error responses", as
     assert.doesNotMatch(message, /sk-this-should-never-leak/i);
     assert.doesNotMatch(message, /secret-token-value/i);
     assert.doesNotMatch(message, /api_key=abc123/i);
+    assert.doesNotMatch(message, /client_secret=super-secret-client/i);
+    assert.doesNotMatch(message, /id_token=super-secret-id/i);
   } finally {
     await codexServer.close();
     temp.cleanup();
@@ -980,7 +982,7 @@ test("redacts JSON-style tokens and Basic credentials in OpenAI error responses"
     responseBody: {
       error: {
         message:
-          '{"access_token":"super-secret-access","refresh_token":"super-secret-refresh","authorization":"Bearer sk-live-super-secret-token","basic":"Basic Zm9vOmJhcg=="}',
+          '{"access_token":"super-secret-access","refresh_token":"super-secret-refresh","client_secret":"super-secret-client","id_token":"super-secret-id","authorization":"Bearer sk-live-super-secret-token","basic":"Basic Zm9vOmJhcg=="}',
       },
     },
   });
@@ -1039,6 +1041,8 @@ test("redacts JSON-style tokens and Basic credentials in OpenAI error responses"
     assert.match(message, /\[redacted\]/i);
     assert.doesNotMatch(message, /super-secret-access/i);
     assert.doesNotMatch(message, /super-secret-refresh/i);
+    assert.doesNotMatch(message, /super-secret-client/i);
+    assert.doesNotMatch(message, /super-secret-id/i);
     assert.doesNotMatch(message, /sk-live-super-secret-token/i);
     assert.doesNotMatch(message, /Bearer\s+sk-live-super-secret-token/i);
     assert.doesNotMatch(message, /Zm9vOmJhcg==/i);
