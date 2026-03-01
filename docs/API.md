@@ -32,7 +32,7 @@ That's all. The agent will handle the rest.
 
 ## Quick Setup
 
-> **IMPORTANT:** make sure you've installed omni-connector (see README.md)
+> **IMPORTANT:** make sure you've installed omni-connector (see [README](../README.md)).
 
 **1.** Run `omni-connector` to start the server, then navigate to `http://localhost:38471` in your browser to see the dashboard
 **2.** Connect AI providers (via OAuth or API key), and set your preferences via the dashboard.

@@ -66,7 +66,7 @@ By default `OAUTH_REQUIRE_QUOTA=true`, so connection linking fails if real quota
 
 ## API
 
-Read API docs [here](docs/API.md)
+Read the API docs [here](docs/API.md).
 
 ## Support
 
