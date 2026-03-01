@@ -78,10 +78,10 @@ function sanitizeExternalErrorMessage(rawMessage: string, fallback: string): str
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
-    return sanitizeExternalErrorMessage(error.message, "request failed");
+    return sanitizeExternalErrorMessage(error.message, "provider request failed");
   }
 
-  return sanitizeExternalErrorMessage("request failed", "request failed");
+  return sanitizeExternalErrorMessage("provider request failed", "provider request failed");
 }
 
 export class ProviderModelsService {
@@ -358,7 +358,7 @@ export class ProviderModelsService {
           return oauthModels;
         }
       } catch (error) {
-        codeAssistError = error instanceof Error ? error : new Error("request failed");
+        codeAssistError = error instanceof Error ? error : new Error("provider request failed");
       }
     }
 
@@ -394,7 +394,7 @@ export class ProviderModelsService {
         }
       }
     } catch (error) {
-      nativeError = error instanceof Error ? error : new Error("request failed");
+      nativeError = error instanceof Error ? error : new Error("provider request failed");
     }
 
     if (modelIds.size === 0) {
@@ -409,7 +409,7 @@ export class ProviderModelsService {
         }
       } catch (error) {
         if (nativeError === null) {
-          nativeError = error instanceof Error ? error : new Error("request failed");
+          nativeError = error instanceof Error ? error : new Error("provider request failed");
         }
       }
     }

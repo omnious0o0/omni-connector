@@ -1269,7 +1269,7 @@ export class ProviderUsageService {
             5 * 60,
           )
         : (() => {
-            errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "request failed")}).`);
+      errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
           })();
 
@@ -1282,7 +1282,7 @@ export class ProviderUsageService {
             7 * 24 * 60,
           )
         : (() => {
-            errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "request failed")}).`);
+      errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
           })();
 
@@ -1374,7 +1374,7 @@ export class ProviderUsageService {
             5 * 60,
           )
         : (() => {
-            errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "request failed")}).`);
+      errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
           })();
 
@@ -1387,7 +1387,7 @@ export class ProviderUsageService {
             7 * 24 * 60,
           )
         : (() => {
-            errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "request failed")}).`);
+      errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
           })();
 
@@ -1474,7 +1474,7 @@ export class ProviderUsageService {
         : (() => {
             const reason =
               fiveHourResult.status === "rejected"
-                ? errorMessage(fiveHourResult.reason, "request failed")
+        ? errorMessage(fiveHourResult.reason, "provider request failed")
                 : `response had no usable quota fields (${JSON_TOTALS_FIELD_HINT})`;
             errors.push(`5h usage fetch failed (${reason}).`);
             return fallbackWindowFromAccount(account, "fiveHour", normalizeLimit(providerConfig.fiveHourLimit));
@@ -1494,7 +1494,7 @@ export class ProviderUsageService {
         : (() => {
             const reason =
               weeklyResult.status === "rejected"
-                ? errorMessage(weeklyResult.reason, "request failed")
+        ? errorMessage(weeklyResult.reason, "provider request failed")
                 : `response had no usable quota fields (${JSON_TOTALS_FIELD_HINT})`;
             errors.push(`7d usage fetch failed (${reason}).`);
             return fallbackWindowFromAccount(account, "weekly", normalizeLimit(providerConfig.weeklyLimit));
