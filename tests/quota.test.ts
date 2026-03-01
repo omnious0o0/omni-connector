@@ -457,9 +457,9 @@ test("frontend weekly quota cap limits shorter quota windows", () => {
   assert.ok(limitedFiveHour);
   assert.ok(limitedWeekly);
   assert.equal(Math.round((limitedWeekly?.ratio ?? 0) * 100), 5);
-  assert.equal(Math.round((limitedFiveHour?.ratio ?? 0) * 100), 50);
-  assert.equal(limitedFiveHour?.remaining, 50);
-  assert.equal(limitedFiveHour?.value.includes("50%"), true);
+  assert.equal(Math.round((limitedFiveHour?.ratio ?? 0) * 100), 100);
+  assert.equal(limitedFiveHour?.remaining, 100);
+  assert.equal(limitedFiveHour?.value.includes("100%"), true);
 });
 
 test("frontend sidebar model helpers normalize IDs and queries", () => {
@@ -848,7 +848,7 @@ test("frontend overall quota metric computes weighted remaining percentage", () 
   ]);
 
   assert.ok(remaining !== null);
-  assert.equal(Math.round(Number(remaining)), 35);
+  assert.equal(Math.round(Number(remaining)), 90);
 });
 
 test("frontend current model metric follows routing preferences", () => {

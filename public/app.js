@@ -1892,20 +1892,6 @@ function quotaWindowSignature(windowView) {
   return `${cadenceKey}|${minutesKey}|${scheduleKey}|${labelKey}|${resetKey}|${ratioKey}|${limitKey}|${usedKey}`;
 }
 
-function windowDurationMinutes(windowView, fallbackMinutes) {
-  const directMinutes = Number(windowView?.windowMinutes);
-  if (Number.isFinite(directMinutes) && directMinutes > 0) {
-    return Math.round(directMinutes);
-  }
-
-  const scheduleDurationMs = Number(windowView?.scheduleDurationMs);
-  if (Number.isFinite(scheduleDurationMs) && scheduleDurationMs > 0) {
-    return Math.max(Math.round(scheduleDurationMs / 60_000), 1);
-  }
-
-  return fallbackMinutes;
-}
-
 function normalizedWindowRemainingUnits(windowView) {
   const limit = Number(windowView?.limit);
   const remaining = Number(windowView?.remaining);
@@ -1976,22 +1962,19 @@ function normalizedAccountQuotaWindows(account) {
     return orderedByDuration;
   }
 
+  const weeklyRatio = clampRatio(Number(weeklyWindow.ratio));
+  if (weeklyRatio > 0) {
+    return orderedByDuration;
+  }
+
+  const fiveHourRatio = clampRatio(Number(fiveHourWindow.ratio));
+  if (fiveHourRatio <= 0) {
+    return orderedByDuration;
+  }
+
   const fiveHourLimit = Number(fiveHourWindow.limit);
-  if (!Number.isFinite(fiveHourLimit) || fiveHourLimit <= 0) {
-    return orderedByDuration;
-  }
-
-  const baseFiveHourRemaining = normalizedWindowRemainingUnits(fiveHourWindow);
-  const weeklyRemaining = normalizedWindowRemainingUnits(weeklyWindow);
-  const cappedFiveHourRemaining = Math.max(Math.min(baseFiveHourRemaining, weeklyRemaining), 0);
-  if (Math.abs(cappedFiveHourRemaining - baseFiveHourRemaining) < 0.0001) {
-    return orderedByDuration;
-  }
-
-  const cappedRatio = clampRatio(cappedFiveHourRemaining / fiveHourLimit);
-  const cappedUsed = Math.max(fiveHourLimit - cappedFiveHourRemaining, 0);
-  const remainingPercent = cappedRatio * 100;
-  const usedPercent = 100 - remainingPercent;
+  const zeroedRemaining = 0;
+  const zeroedUsed = Number.isFinite(fiveHourLimit) && fiveHourLimit > 0 ? fiveHourLimit : Number(fiveHourWindow.used);
 
   return orderedByDuration.map((windowView) => {
     if (windowView.slot !== "fiveHour") {
@@ -2000,11 +1983,11 @@ function normalizedAccountQuotaWindows(account) {
 
     return {
       ...windowView,
-      ratio: cappedRatio,
-      remaining: cappedFiveHourRemaining,
-      used: cappedUsed,
-      value: `${formatPercentValue(remainingPercent)}`,
-      detail: `${formatPercentValue(usedPercent)} used / 100% capacity`,
+      ratio: 0,
+      remaining: zeroedRemaining,
+      used: zeroedUsed,
+      value: "0%",
+      detail: "100% used / 100% capacity",
     };
   });
 }
@@ -2214,14 +2197,7 @@ function computeOverallQuotaRemainingPercent(accounts) {
 
     const weeklyLimit = Number(weeklyWindow.limit);
     if (Number.isFinite(weeklyLimit) && weeklyLimit > 0) {
-      const weeklyRemaining = normalizedWindowRemainingUnits(weeklyWindow);
-      const fiveHourWindow = windows.find((windowView) => windowView.slot === "fiveHour") ?? null;
-      let effectiveRemaining = weeklyRemaining;
-      if (fiveHourWindow) {
-        const fiveHourRemaining = normalizedWindowRemainingUnits(fiveHourWindow);
-        effectiveRemaining = Math.min(weeklyRemaining, fiveHourRemaining);
-      }
-
+      const effectiveRemaining = normalizedWindowRemainingUnits(weeklyWindow);
       const effectiveRatio = clampRatio(effectiveRemaining / weeklyLimit);
       weightedPercentSum += effectiveRatio * 100 * weeklyLimit;
       weightedLimitTotal += weeklyLimit;
