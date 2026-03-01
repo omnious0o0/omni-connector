@@ -3,10 +3,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { createApp } from "./app";
 import { DEFAULT_PORT, resolveConfig } from "./config";
 
-const KNOWN_FLAGS = new Set(["--help", "-h", "--version", "-v", "--init-only"]);
+const KNOWN_FLAGS = new Set(["--help", "-h", "--version", "-v", "--init-only", "--update", "--upd"]);
 
 function packageRootFromRuntime(): string {
   return path.resolve(__dirname, "..", "..");
@@ -58,10 +59,12 @@ function printHelp(): void {
       "omni-connector",
       "",
       "Usage:",
-      "  omni-connector [--init-only]",
+      "  omni-connector [--init-only|--update|--upd]",
       "",
       "Options:",
       "  --init-only   Initialize runtime files and exit",
+      "  --update      Update omni-connector to latest installer release",
+      "  --upd         Shortcut for --update",
       "  --version     Print installed version",
       "  --help        Show this help text",
       "",
@@ -77,6 +80,95 @@ function printHelp(): void {
       "",
     ].join("\n"),
   );
+}
+
+function runSelfUpdate(): void {
+  const repo = process.env.OMNI_CONNECTOR_REPO || "omnious0o0/omni-connector";
+  const ref = process.env.OMNI_CONNECTOR_REF || "main";
+  const installScriptUrl =
+    process.env.OMNI_CONNECTOR_INSTALL_SCRIPT_URL || `https://raw.githubusercontent.com/${repo}/${ref}/scripts/install.sh`;
+  const installScriptSha256 = process.env.OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 || "";
+  const updateEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    OMNI_CONNECTOR_REPO: repo,
+    OMNI_CONNECTOR_REF: ref,
+    OMNI_CONNECTOR_INSTALL_SCRIPT_URL: installScriptUrl,
+    OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256: installScriptSha256,
+    OMNI_CONNECTOR_AUTO_START: "0",
+    OMNI_CONNECTOR_AUTO_OPEN_BROWSER: "0",
+    OMNI_CONNECTOR_SKIP_LOCAL_ENV: "1",
+  };
+
+  const updateRunnerPath = path.join(os.homedir(), ".omni-connector", "install", "update.sh");
+  if (fs.existsSync(updateRunnerPath)) {
+    const localRunnerResult = spawnSync("bash", [updateRunnerPath], {
+      stdio: "inherit",
+      env: updateEnv,
+      cwd: os.homedir(),
+    });
+
+    if ((localRunnerResult.status ?? 1) === 0) {
+      return;
+    }
+
+    process.stderr.write("Local updater failed, retrying with a fresh installer download...\n");
+  }
+
+  const updateScript = [
+    "set -euo pipefail",
+    "tmp_file=\"$(mktemp)\"",
+    "cleanup(){ rm -f \"${tmp_file}\"; }",
+    "trap cleanup EXIT",
+    "default_install_script_url=\"https://raw.githubusercontent.com/${OMNI_CONNECTOR_REPO}/${OMNI_CONNECTOR_REF}/scripts/install.sh\"",
+    "if [ \"${OMNI_CONNECTOR_INSTALL_SCRIPT_URL}\" != \"${default_install_script_url}\" ] && [ -z \"${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}\" ]; then",
+    "  printf 'custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256\\n' >&2",
+    "  exit 1",
+    "fi",
+    "if command -v curl >/dev/null 2>&1; then",
+    "  curl -fsSL -o \"${tmp_file}\" \"${OMNI_CONNECTOR_INSTALL_SCRIPT_URL}\"",
+    "elif command -v wget >/dev/null 2>&1; then",
+    "  wget -qO \"${tmp_file}\" \"${OMNI_CONNECTOR_INSTALL_SCRIPT_URL}\"",
+    "else",
+    "  printf 'Update requires curl or wget in PATH\\n' >&2",
+    "  exit 1",
+    "fi",
+    "if [ -n \"${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}\" ]; then",
+    "  expected_checksum=\"$(printf '%s' \"${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256}\" | tr '[:upper:]' '[:lower:]')\"",
+    "  if ! printf '%s' \"${expected_checksum}\" | grep -Eq '^[0-9a-f]{64}$'; then",
+    "    printf 'OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 must be a 64-character hex string\\n' >&2",
+    "    exit 1",
+    "  fi",
+    "  if command -v sha256sum >/dev/null 2>&1; then",
+    "    actual_checksum=\"$(sha256sum \"${tmp_file}\" | awk '{print $1}')\"",
+    "  elif command -v shasum >/dev/null 2>&1; then",
+    "    actual_checksum=\"$(shasum -a 256 \"${tmp_file}\" | awk '{print $1}')\"",
+    "  elif command -v openssl >/dev/null 2>&1; then",
+    "    actual_checksum=\"$(openssl dgst -sha256 \"${tmp_file}\" | awk '{print $2}')\"",
+    "  else",
+    "    printf 'Checksum verification requires sha256sum, shasum, or openssl\\n' >&2",
+    "    exit 1",
+    "  fi",
+    "  if [ \"${actual_checksum}\" != \"${expected_checksum}\" ]; then",
+    "    printf 'Installer checksum mismatch\\n' >&2",
+    "    printf 'Expected: %s\\n' \"${expected_checksum}\" >&2",
+    "    printf 'Actual:   %s\\n' \"${actual_checksum}\" >&2",
+    "    exit 1",
+    "  fi",
+    "fi",
+    "OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 bash \"${tmp_file}\"",
+  ].join("\n");
+
+  const result = spawnSync("bash", ["-lc", updateScript], {
+    stdio: "inherit",
+    env: updateEnv,
+    cwd: os.homedir(),
+  });
+
+  if ((result.status ?? 1) !== 0) {
+    const statusSuffix = typeof result.status === "number" ? ` (exit ${result.status})` : "";
+    const signalSuffix = result.signal ? ` (signal ${result.signal})` : "";
+    throw new Error(`Update failed${statusSuffix}${signalSuffix}`);
+  }
 }
 
 function assertKnownFlags(argv: string[]): void {
@@ -166,11 +258,17 @@ function loadLocalEnv(env: NodeJS.ProcessEnv, baseDirectory: string): void {
   loadEnvFile(path.join(baseDirectory, ".env.local"), env);
 }
 
+function shouldSkipLocalEnv(env: NodeJS.ProcessEnv): boolean {
+  return env.OMNI_CONNECTOR_SKIP_LOCAL_ENV === "1";
+}
+
 export function runCli(argv: string[]): void {
   assertKnownFlags(argv);
 
   const packageRoot = packageRootFromRuntime();
-  loadLocalEnv(process.env, process.cwd());
+  if (!shouldSkipLocalEnv(process.env)) {
+    loadLocalEnv(process.env, process.cwd());
+  }
 
   if (argv.includes("--help") || argv.includes("-h")) {
     printHelp();
@@ -179,6 +277,11 @@ export function runCli(argv: string[]): void {
 
   if (argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${readPackageVersion(packageRoot)}\n`);
+    return;
+  }
+
+  if (argv.includes("--update") || argv.includes("--upd")) {
+    runSelfUpdate();
     return;
   }
 

@@ -4,7 +4,8 @@
   "description": "Multi-account OpenAI quota monitor and connector router",
   "main": "dist/src/cli.js",
   "bin": {
-    "omni-connector": "bin/omni-connector"
+    "omni-connector": "bin/omni-connector",
+    "pn": "bin/omni-connector"
   },
   "files": [
     "bin/omni-connector",
