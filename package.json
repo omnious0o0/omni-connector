@@ -8,11 +8,16 @@
     "pn": "bin/omni-connector"
   },
   "files": [
+    "install.sh",
+    "install.ps1",
+    "install.sh.sha256",
+    "install.ps1.sha256",
     "bin/omni-connector",
     "dist/**",
     "public/**",
     "assets/**",
     "scripts/install.sh",
+    "scripts/install.sh.sha256",
     "scripts/generate-data-encryption-key.mjs",
     "docs/API.md",
     "README.md",
