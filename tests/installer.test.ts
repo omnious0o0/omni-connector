@@ -126,3 +126,21 @@ test("installer download steps use spinner-friendly quiet transfer flags", () =>
   assert.equal(script.includes('run_with_spinner "Downloading source archive" download_file'), true);
   assert.equal(script.includes('run_with_spinner "Downloading nvm installer" download_file'), true);
 });
+
+test("installer stage progress line uses compact width and prefixes phase counter", () => {
+  const script = readInstallerScript();
+
+  assert.equal(script.includes("STAGE_BAR_WIDTH=24"), true);
+  assert.equal(script.includes("STAGE_BAR_WIDTH=34"), false);
+  assert.equal(script.includes("resolve_stage_bar_width()"), true);
+  assert.equal(script.includes('bar_width="$(resolve_stage_bar_width)"'), true);
+  assert.equal(script.includes('local bar_width="$2"'), true);
+  assert.equal(script.includes('render_stage_bar "${completed}" "${bar_width}"'), true);
+
+  const stageLineFormat = script
+    .split("\n")
+    .find((line) => line.includes('printf "%b[%s]%b %b%3d%%%b'));
+  assert.equal(typeof stageLineFormat === "string", true);
+  assert.equal((stageLineFormat ?? "").includes("%b(%d/%d)%b  %s"), true);
+  assert.equal((stageLineFormat ?? "").includes("%s  %b(%d/%d)%b"), false);
+});

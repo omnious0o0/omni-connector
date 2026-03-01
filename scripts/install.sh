@@ -21,15 +21,45 @@ NVM_VERSION="v0.40.3"
 apt_index_ready=0
 stage_current=0
 stage_total=0
-STAGE_BAR_WIDTH=34
+STAGE_BAR_WIDTH=24
+
+resolve_stage_bar_width() {
+  local terminal_columns
+  terminal_columns="${COLUMNS:-}"
+
+  if [[ -z "${terminal_columns}" ]] && command -v tput >/dev/null 2>&1; then
+    terminal_columns="$(tput cols 2>/dev/null || true)"
+  fi
+
+  if [[ ! "${terminal_columns}" =~ ^[0-9]+$ ]] || [[ "${terminal_columns}" -le 0 ]]; then
+    printf "%d" "${STAGE_BAR_WIDTH}"
+    return
+  fi
+
+  local reserved_columns=34
+  local min_width=10
+  local computed_width
+  computed_width=$((terminal_columns - reserved_columns))
+
+  if [[ "${computed_width}" -lt "${min_width}" ]]; then
+    computed_width="${min_width}"
+  fi
+
+  if [[ "${computed_width}" -gt "${STAGE_BAR_WIDTH}" ]]; then
+    computed_width="${STAGE_BAR_WIDTH}"
+  fi
+
+  printf "%d" "${computed_width}"
+}
 
 render_stage_bar() {
   local completed_segments="$1"
+  local bar_width="$2"
   local filled empty
 
   filled="$(printf '%*s' "${completed_segments}" '')"
   filled="${filled// /=}"
-  empty="$(printf '%*s' "$((STAGE_BAR_WIDTH - completed_segments))" '')"
+  empty="$(printf '%*s' "$((bar_width - completed_segments))" '')"
   empty="${empty// /-}"
 
   printf "%s%s" "${filled}" "${empty}"
@@ -45,18 +75,20 @@ stage_step() {
     return
   fi
 
+  local bar_width
+  bar_width="$(resolve_stage_bar_width)"
   local completed
-  completed=$((stage_current * STAGE_BAR_WIDTH / stage_total))
-  if [[ "${completed}" -gt "${STAGE_BAR_WIDTH}" ]]; then
-    completed="${STAGE_BAR_WIDTH}"
+  completed=$((stage_current * bar_width / stage_total))
+  if [[ "${completed}" -gt "${bar_width}" ]]; then
+    completed="${bar_width}"
   fi
 
   local percent
   percent=$((stage_current * 100 / stage_total))
   local bar
-  bar="$(render_stage_bar "${completed}")"
+  bar="$(render_stage_bar "${completed}" "${bar_width}")"
 
-  printf "%b[%s]%b %b%3d%%%b  %s  %b(%d/%d)%b\n" "${bold}" "${bar}" "${reset}" "${cyan}" "${percent}" "${reset}" "${message}" "${dim}" "${stage_current}" "${stage_total}" "${reset}"
+  printf "%b[%s]%b %b%3d%%%b %b(%d/%d)%b  %s\n" "${bold}" "${bar}" "${reset}" "${cyan}" "${percent}" "${reset}" "${dim}" "${stage_current}" "${stage_total}" "${reset}" "${message}"
 }
 
 print_logo() {
