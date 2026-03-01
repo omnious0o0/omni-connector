@@ -77,8 +77,16 @@ function sanitizeExternalErrorMessage(rawMessage: string, fallback: string): str
 
   const redacted = normalized
     .replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi, "$1[redacted]")
-    .replace(/(\b(?:key|api_key|apikey|token|access_token|refresh_token)=)([^\s&]+)/gi, "$1[redacted]")
-    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]{10,}/gi, "$1[redacted]")
+    .replace(
+      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)(["'])([^"']*)(\2)/gi,
+      "$1$2[redacted]$4",
+    )
+    .replace(
+      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)([^"',\s}]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]{8,}/gi, "$1[redacted]")
+    .replace(/(\bBasic\s+)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|xox[baprs]-[A-Za-z0-9-]+)\b/g, "[redacted]");
 
   return redacted.slice(0, EXTERNAL_ERROR_MESSAGE_MAX_LENGTH);

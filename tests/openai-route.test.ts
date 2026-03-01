@@ -973,6 +973,82 @@ test("redacts sensitive provider failure messages in OpenAI error responses", as
   }
 });
 
+test("redacts JSON-style tokens and Basic credentials in OpenAI error responses", async () => {
+  const temp = createTempDataPath();
+  const codexServer = await startMockOpenAiServer({
+    status: 503,
+    responseBody: {
+      error: {
+        message:
+          '{"access_token":"super-secret-access","refresh_token":"super-secret-refresh","authorization":"Bearer sk-live-super-secret-token","basic":"Basic Zm9vOmJhcg=="}',
+      },
+    },
+  });
+
+  try {
+    const app = createApp({
+      dataFilePath: temp.dataFilePath,
+      sessionSecret: "test-session-secret",
+      publicDir: path.join(process.cwd(), "public"),
+      port: 0,
+      oauthRequireQuota: false,
+      defaultFiveHourLimit: 0,
+      defaultWeeklyLimit: 0,
+      defaultFiveHourUsed: 0,
+      defaultWeeklyUsed: 0,
+      providerInferenceBaseUrls: buildInferenceBaseUrls({
+        codex: `${codexServer.baseUrl}/v1`,
+      }),
+    });
+
+    const agent = supertest.agent(app);
+    await agent
+      .post("/api/accounts/link-api")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .send({
+        provider: "codex",
+        displayName: "Codex API",
+        providerAccountId: "codex-redaction-json",
+        apiKey: "codex-redaction-json-key",
+      })
+      .expect(201);
+
+    const dashboard = await agent
+      .get("/api/dashboard")
+      .set(DASHBOARD_CLIENT_HEADER)
+      .expect(200);
+    const connectorKey = dashboard.body.connector.apiKey as string;
+
+    const response = await agent
+      .post("/v1/chat/completions")
+      .set("Authorization", `Bearer ${connectorKey}`)
+      .send({
+        model: "auto",
+        messages: [{ role: "user", content: "redaction json/basic test" }],
+      })
+      .expect(503);
+
+    assert.equal(response.body.error?.code, "no_providers_available");
+    assert.equal(response.body.error?.type, "server_error");
+    const failures = response.body.error?.provider_failures as Array<{ message?: string }>;
+    assert.equal(Array.isArray(failures), true);
+    assert.equal(failures.length, 1);
+    const message = failures[0]?.message ?? "";
+    assert.equal(message.length > 0, true);
+    assert.equal(message.length <= 260, true);
+    assert.match(message, /\[redacted\]/i);
+    assert.doesNotMatch(message, /super-secret-access/i);
+    assert.doesNotMatch(message, /super-secret-refresh/i);
+    assert.doesNotMatch(message, /sk-live-super-secret-token/i);
+    assert.doesNotMatch(message, /Bearer\s+sk-live-super-secret-token/i);
+    assert.doesNotMatch(message, /Zm9vOmJhcg==/i);
+    assert.doesNotMatch(message, /Basic\s+Zm9vOmJhcg==/i);
+  } finally {
+    await codexServer.close();
+    temp.cleanup();
+  }
+});
+
 test("returns 503 with provider failure breakdown when all upstream calls fail", async () => {
   const temp = createTempDataPath();
   const codexServer = await startMockOpenAiServer({
