@@ -135,14 +135,14 @@ persist_path_entry() {
   fi
 
   local export_line
-  export_line="export PATH=\"${path_entry}:\$PATH\""
+  export_line="case \":\$PATH:\" in *\":${path_entry}:\"*) ;; *) export PATH=\"${path_entry}:\$PATH\" ;; esac"
 
   append_line_if_missing "${HOME}/.profile" "${export_line}"
   append_line_if_missing "${HOME}/.bashrc" "${export_line}"
   append_line_if_missing "${HOME}/.zshrc" "${export_line}"
 
   local fish_line
-  fish_line="set -gx PATH \"${path_entry}\" \$PATH"
+  fish_line="contains -- \"${path_entry}\" \$PATH; or set -gx PATH \"${path_entry}\" \$PATH"
   append_line_if_missing "${HOME}/.config/fish/config.fish" "${fish_line}"
 }
 
@@ -747,8 +747,9 @@ if (( current_epoch - last_epoch < update_interval_seconds )); then
   exit 0
 fi
 
-printf "%s" "${current_epoch}" >"${last_run_file}"
-if ! "${update_runner_path}" >>"${log_file}" 2>&1; then
+if "${update_runner_path}" >>"${log_file}" 2>&1; then
+  printf "%s" "${current_epoch}" >"${last_run_file}"
+else
   printf "[%s] Auto-update failed\n" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >>"${log_file}"
 fi
 EOF
