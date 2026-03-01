@@ -148,6 +148,7 @@ type AppContext = vm.Context & {
     value: string;
     detail: string;
   };
+  reRenderIcons: () => void;
   resolveQuotaWindowLabel: (account: unknown, slot: string, windowView: unknown) => string;
   quotaWindowSignature: (windowView: unknown) => string;
   __documentListeners?: Map<string, Array<(event: { target: unknown }) => unknown>>;
@@ -921,4 +922,53 @@ test("frontend topbar issue collector groups errors warnings and notifications",
     JSON.stringify(context.collectTopbarIssues()),
   ) as ReturnType<AppContext["collectTopbarIssues"]>;
   assert.equal(infoIssues.some((issue) => issue.type === "info"), true);
+});
+
+test("frontend icon rerender marks lucide svgs as decorative", () => {
+  const context = loadFrontendAppContext();
+
+  const iconA = {
+    attrs: new Map<string, string>(),
+    setAttribute(name: string, value: string) {
+      this.attrs.set(name, value);
+    },
+  };
+  const iconB = {
+    attrs: new Map<string, string>(),
+    setAttribute(name: string, value: string) {
+      this.attrs.set(name, value);
+    },
+  };
+
+  let createIconsCalls = 0;
+  const lucideStub = {
+    createIcons() {
+      createIconsCalls += 1;
+    },
+  };
+
+  const documentStub = context.document as {
+    querySelectorAll: (selector: string) => unknown[];
+  };
+  documentStub.querySelectorAll = (selector: string) => {
+    if (selector === "svg.lucide") {
+      return [iconA, iconB];
+    }
+
+    return [];
+  };
+
+  const windowStub = context.window as {
+    lucide: { createIcons: () => void } | null;
+  };
+  windowStub.lucide = lucideStub;
+  context.lucide = lucideStub;
+
+  context.reRenderIcons();
+
+  assert.equal(createIconsCalls, 1);
+  assert.equal(iconA.attrs.get("aria-hidden"), "true");
+  assert.equal(iconA.attrs.get("focusable"), "false");
+  assert.equal(iconB.attrs.get("aria-hidden"), "true");
+  assert.equal(iconB.attrs.get("focusable"), "false");
 });

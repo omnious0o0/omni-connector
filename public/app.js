@@ -136,15 +136,23 @@ const AUTO_REFRESH_INTERVAL_MS = 30_000;
 const KNOWN_PROVIDER_IDS = ["codex", "gemini", "claude", "openrouter"];
 const CONNECT_WARNING_TOOLTIP_ID = "connect-provider-warning-tooltip";
 
-if (window.lucide) {
-  lucide.createIcons();
-}
-
 function reRenderIcons() {
   if (window.lucide) {
     lucide.createIcons();
   }
+
+  const icons = document.querySelectorAll("svg.lucide");
+  for (const icon of icons) {
+    if (!icon || typeof icon !== "object" || typeof icon.setAttribute !== "function") {
+      continue;
+    }
+
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("focusable", "false");
+  }
 }
+
+reRenderIcons();
 
 function setDescribedByToken(element, token, enabled) {
   const current = (element.getAttribute("aria-describedby") ?? "").trim();
@@ -651,7 +659,8 @@ function applySidebarState() {
   document.documentElement.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
 
   if (toggleSidebarButton instanceof HTMLElement) {
-    toggleSidebarButton.setAttribute("aria-pressed", sidebarCollapsed ? "true" : "false");
+    const expanded = !(sidebarCollapsed && !isMobileViewport());
+    toggleSidebarButton.setAttribute("aria-expanded", expanded ? "true" : "false");
     toggleSidebarButton.textContent = "";
     const icon = document.createElement("i");
     icon.setAttribute("data-lucide", sidebarCollapsed ? "panel-left-open" : "panel-left-close");
@@ -4334,6 +4343,21 @@ window.addEventListener("keydown", (event) => {
       }
     }
     return;
+  }
+
+  if (event.key === "Escape") {
+    const warningTriggerToFocus =
+      activeWarningTrigger instanceof HTMLElement ? activeWarningTrigger : null;
+    const warningTooltipVisible =
+      connectWarningTooltipElement instanceof HTMLElement && !connectWarningTooltipElement.hidden;
+    if (warningTooltipVisible) {
+      hideConnectWarningTooltip();
+      if (warningTriggerToFocus instanceof HTMLElement) {
+        warningTriggerToFocus.focus();
+      }
+      event.preventDefault();
+      return;
+    }
   }
 
   if (event.key !== "Escape") {

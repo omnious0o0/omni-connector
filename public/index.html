@@ -20,7 +20,7 @@
 
 <body>
   <div class="app-layout">
-    <aside class="sidebar">
+    <aside id="workspace-sidebar" class="sidebar">
       <div class="sidebar-header">
         <div class="logo-box">
           <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2"
@@ -38,7 +38,7 @@
           <p class="brand-subtitle">multi-connection router</p>
         </div>
         <button id="toggle-sidebar" class="btn btn-icon sidebar-toggle-btn" type="button" aria-label="Collapse panel"
-          title="Collapse panel">
+          aria-controls="workspace-sidebar" aria-expanded="true" title="Collapse panel">
           <i data-lucide="panel-left-close"></i>
         </button>
       </div>
