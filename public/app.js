@@ -24,6 +24,7 @@ const rememberPageTabInput = document.querySelector("#settings-remember-page-tab
 const keyAccessNote = document.querySelector("#key-access-note");
 const connectorKeyElement = document.querySelector("#connector-key");
 const accountsListElement = document.querySelector("#accounts-list");
+const connectionsHeadingElement = document.querySelector("#connections-heading");
 const sidebarModelsContentElement = document.querySelector("#sidebar-models-content");
 const sidebarModelsSearchInput = document.querySelector("#sidebar-models-search");
 const sidebarModelsSearchClearButton = document.querySelector("#sidebar-models-search-clear");
@@ -2344,20 +2345,40 @@ function renderApiBalanceBlock(account) {
   }
 
   const rawBalance = typeof account?.creditsBalance === "string" ? account.creditsBalance.trim() : "";
-  if (rawBalance.length === 0) {
-    return "";
-  }
-
   const currencyCode = detectBalanceCurrencyCode(rawBalance);
+  const parsedBalance = parseBalanceNumber(rawBalance);
+  const normalizedBalance = parsedBalance === null ? 0 : parsedBalance;
+  const formattedBalance = formatBalanceValue(normalizedBalance, currencyCode);
 
   return `
-    <div class="quota-clean-block">
+    <div class="quota-clean-block api-balance-only">
       <div class="quota-clean-head">
         <span class="quota-mini-label">API balance</span>
-        <span class="quota-mini-value">${escapeHtml(formatBalanceValue(rawBalance, currencyCode))}</span>
+        <span class="quota-mini-value">${escapeHtml(formattedBalance)}</span>
       </div>
     </div>
   `;
+}
+
+function normalizedConnectionCount(value) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return Math.round(parsed);
+}
+
+function connectionsHeadingText(value) {
+  return `Connections ${normalizedConnectionCount(value)}`;
+}
+
+function updateConnectionsHeading(value) {
+  if (!(connectionsHeadingElement instanceof HTMLElement)) {
+    return;
+  }
+
+  connectionsHeadingElement.textContent = connectionsHeadingText(value);
 }
 
 function normalizeQuotaSyncIssue(rawIssue) {
@@ -2414,6 +2435,8 @@ function setAccountsListBusy(isBusy) {
 }
 
 function renderAccountsLoadError(message) {
+  updateConnectionsHeading(0);
+
   if (!(accountsListElement instanceof HTMLElement)) {
     return;
   }
@@ -2437,10 +2460,13 @@ function renderAccountsLoadError(message) {
 }
 
 function renderAccounts(accounts) {
+  const accountCount = Array.isArray(accounts) ? accounts.length : 0;
+  updateConnectionsHeading(accountCount);
+
   if (!accountsListElement) return;
   setAccountsListBusy(false);
 
-  if (accounts.length === 0) {
+  if (accountCount === 0) {
     accountsListElement.classList.add("is-empty");
     accountsListElement.classList.remove("single-account");
     accountsListElement.innerHTML = `
@@ -2455,7 +2481,7 @@ function renderAccounts(accounts) {
   }
 
   accountsListElement.classList.remove("is-empty");
-  accountsListElement.classList.toggle("single-account", accounts.length === 1);
+  accountsListElement.classList.toggle("single-account", accountCount === 1);
 
   const cards = accounts
     .map((account) => {

@@ -124,6 +124,7 @@ type AppContext = vm.Context & {
     liveBalanceCount: number;
   } | null;
   buildQuotaWindowView: (windowData: unknown, quotaSyncedAt: unknown) => Record<string, unknown>;
+  connectionsHeadingText: (value: unknown) => string;
   copySidebarModelId: (fullModelId: unknown) => Promise<void>;
   composeProviderModelId: (providerId: unknown, modelId: unknown) => string;
   formatBalanceValue: (value: unknown) => string;
@@ -689,6 +690,22 @@ test("frontend API balance helpers render readable values and account metrics", 
   assert.equal(balanceMarkup.includes("125"), true);
   assert.equal(balanceMarkup.includes("pro plan"), false);
 
+  const fallbackMarkup = context.renderApiBalanceBlock({
+    authMethod: "api",
+  });
+  assert.equal(fallbackMarkup.includes("API balance"), true);
+  assert.equal(fallbackMarkup.includes("api-balance-only"), true);
+  assert.equal(fallbackMarkup.includes("quota-track"), false);
+  assert.equal(fallbackMarkup.includes("$"), true);
+  assert.equal(fallbackMarkup.includes("0.00"), true);
+
+  const nonNumericMarkup = context.renderApiBalanceBlock({
+    authMethod: "api",
+    creditsBalance: "unavailable",
+  });
+  assert.equal(nonNumericMarkup.includes("$"), true);
+  assert.equal(nonNumericMarkup.includes("0.00"), true);
+
   const summary = context.buildDashboardApiBalanceMetrics([
     {
       authMethod: "api",
@@ -705,6 +722,15 @@ test("frontend API balance helpers render readable values and account metrics", 
   assert.equal(summary?.accountCount, 2);
   assert.equal(summary?.liveBalanceCount, 2);
   assert.match(String(summary?.detail ?? ""), /2 API connections with live balance/);
+});
+
+test("frontend connections heading helper formats connection counts", () => {
+  const context = loadFrontendAppContext();
+
+  assert.equal(context.connectionsHeadingText(0), "Connections 0");
+  assert.equal(context.connectionsHeadingText(3.6), "Connections 4");
+  assert.equal(context.connectionsHeadingText(-2), "Connections 0");
+  assert.equal(context.connectionsHeadingText(Number.NaN), "Connections 0");
 });
 
 test("frontend API balance summary includes API subset in mixed auth dashboards", () => {

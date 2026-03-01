@@ -950,6 +950,12 @@ body.accounts-density-comfortable .account-card {
   min-height: 62px;
 }
 
+.quota-clean-block.api-balance-only {
+  min-height: 40px;
+  gap: 0;
+  justify-content: center;
+}
+
 .quota-clean-head {
   display: flex;
   align-items: center;
