@@ -808,7 +808,8 @@ export class OAuthProviderService {
         weeklyResetsAt = liveQuotaSnapshot.weekly.resetsAt;
       }
     } catch (error) {
-      quotaSyncError = error instanceof Error ? error.message : "Live usage sync failed.";
+      quotaSyncError =
+        error instanceof Error ? error.message : "Connected, but live usage data could not be retrieved.";
     }
 
     if (quotaSyncStatus !== "live") {
@@ -1234,7 +1235,7 @@ export class OAuthProviderService {
 
         return payload;
       } catch (error) {
-        lastError = error instanceof Error ? error.message : "Usage endpoint request failed.";
+        lastError = error instanceof Error ? error.message : "Usage endpoint did not respond.";
       }
     }
 
@@ -1390,7 +1391,7 @@ export class OAuthProviderService {
         },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "OAuth token request failed.";
+      const message = error instanceof Error ? error.message : "OAuth token request could not be completed.";
       throw new HttpError(502, "oauth_token_request_failed", message);
     }
 
@@ -1423,7 +1424,7 @@ export class OAuthProviderService {
         },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "OAuth token request failed.";
+      const message = error instanceof Error ? error.message : "OAuth token request could not be completed.";
       throw new HttpError(502, "oauth_token_request_failed", message);
     }
 
@@ -1461,7 +1462,7 @@ export class OAuthProviderService {
         },
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "OAuth user info request failed.";
+      const message = error instanceof Error ? error.message : "OAuth user info request could not be completed.";
       throw new HttpError(502, "oauth_userinfo_failed", message);
     }
 

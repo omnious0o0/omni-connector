@@ -769,7 +769,7 @@ export class ConnectorService {
       } catch (error) {
         const detail = syncErrorDetail(error, "unknown live quota sync failure");
         const syncIssue = quotaSyncIssueFromError(error);
-        const message = `Live quota sync failed: ${detail}`;
+        const message = `Live quota could not be refreshed: ${detail}`;
         process.stderr.write(`Live quota sync failed for account ${target.id}: ${detail}\n`);
         const nowIso = new Date().toISOString();
         this.accounts.update((draft) => {
@@ -861,7 +861,7 @@ export class ConnectorService {
           target.tokenExpiresAt = refreshedToken.tokenExpiresAt;
         } catch (error) {
           const detail = syncErrorDetail(error, "unknown token refresh failure");
-          const message = "Failed to refresh access token.";
+          const message = "Could not refresh access token. Reconnect this provider.";
           process.stderr.write(`Access token refresh failed for account ${target.id}: ${detail}\n`);
           const nowIso = new Date().toISOString();
           this.accounts.update((draft) => {

@@ -429,7 +429,7 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
         return;
       }
 
-      throw new HttpError(400, "oauth_state_mismatch", "OAuth state validation failed.");
+      throw new HttpError(400, "oauth_state_mismatch", "OAuth session is invalid or expired. Start the connection again.");
     }
 
     if (!flow.redirectUri) {

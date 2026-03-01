@@ -65,7 +65,7 @@ function writeVerificationSeededStore(
         updatedAt: now,
         quotaSyncedAt: now,
         quotaSyncStatus: "unavailable",
-        quotaSyncError: "Live quota sync failed: status 403.",
+        quotaSyncError: "Live quota could not be refreshed: status 403.",
         quotaSyncIssue: includeIssue
           ? {
               kind: "account_verification_required",
@@ -1506,7 +1506,7 @@ test("rejects OAuth callback without matching session cookie", async () => {
     await supertest(app)
       .get(`${callbackUrl.pathname}${callbackUrl.search}`)
       .expect(400)
-      .expect("OAuth state validation failed.");
+      .expect("OAuth session is invalid or expired. Start the connection again.");
 
     const dashboard = await startAgent
       .get("/api/dashboard")
@@ -2463,7 +2463,7 @@ test("opens verification helper and returns to dashboard after completion", asyn
           updatedAt: now,
           quotaSyncedAt: now,
           quotaSyncStatus: "unavailable",
-          quotaSyncError: "Live quota sync failed: status 403.",
+          quotaSyncError: "Live quota could not be refreshed: status 403.",
           quotaSyncIssue: {
             kind: "account_verification_required",
             title: "Account verification required",
@@ -3810,7 +3810,7 @@ test("marks partial provider usage sync as stale in strict live mode", async () 
       .expect(200);
 
     assert.equal(dashboard.body.accounts[0]?.quotaSyncStatus, "stale");
-    assert.match(String(dashboard.body.accounts[0]?.quotaSyncError ?? ""), /5h usage fetch failed/i);
+    assert.match(String(dashboard.body.accounts[0]?.quotaSyncError ?? ""), /could not refresh 5h usage/i);
 
     const connectorKey = dashboard.body.connector.apiKey as string;
     const route = await agent

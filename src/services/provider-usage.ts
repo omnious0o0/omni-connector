@@ -900,7 +900,11 @@ export class ProviderUsageService {
         },
       );
     } catch (error) {
-      throw new HttpError(502, "provider_usage_fetch_failed", errorMessage(error, "Usage fetch failed."));
+      throw new HttpError(
+        502,
+        "provider_usage_fetch_failed",
+        errorMessage(error, "Could not fetch live usage from provider."),
+      );
     }
 
     const rawBody = await response.text();
@@ -956,7 +960,11 @@ export class ProviderUsageService {
         if (error instanceof HttpError) {
           lastError = error;
         } else {
-          lastError = new HttpError(502, "provider_usage_fetch_failed", errorMessage(error, "Usage fetch failed."));
+          lastError = new HttpError(
+            502,
+            "provider_usage_fetch_failed",
+            errorMessage(error, "Could not fetch live usage from provider."),
+          );
         }
       }
     }
@@ -974,7 +982,11 @@ export class ProviderUsageService {
           if (error instanceof HttpError) {
             lastError = error;
           } else {
-            lastError = new HttpError(502, "provider_usage_fetch_failed", errorMessage(error, "Usage fetch failed."));
+            lastError = new HttpError(
+              502,
+              "provider_usage_fetch_failed",
+              errorMessage(error, "Could not fetch live usage from provider."),
+            );
           }
         }
       }
@@ -1269,7 +1281,7 @@ export class ProviderUsageService {
             5 * 60,
           )
         : (() => {
-      errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "provider request failed")}).`);
+      errors.push(`Could not refresh 5h usage (${errorMessage(fiveHourResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
           })();
 
@@ -1282,7 +1294,7 @@ export class ProviderUsageService {
             7 * 24 * 60,
           )
         : (() => {
-      errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "provider request failed")}).`);
+      errors.push(`Could not refresh 7d usage (${errorMessage(weeklyResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
           })();
 
@@ -1374,7 +1386,7 @@ export class ProviderUsageService {
             5 * 60,
           )
         : (() => {
-      errors.push(`5h usage fetch failed (${errorMessage(fiveHourResult.reason, "provider request failed")}).`);
+      errors.push(`Could not refresh 5h usage (${errorMessage(fiveHourResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "fiveHour", fiveHourLimit);
           })();
 
@@ -1387,7 +1399,7 @@ export class ProviderUsageService {
             7 * 24 * 60,
           )
         : (() => {
-      errors.push(`7d usage fetch failed (${errorMessage(weeklyResult.reason, "provider request failed")}).`);
+      errors.push(`Could not refresh 7d usage (${errorMessage(weeklyResult.reason, "provider request failed")}).`);
             return fallbackWindowFromAccount(account, "weekly", weeklyLimit);
           })();
 
@@ -1476,7 +1488,7 @@ export class ProviderUsageService {
               fiveHourResult.status === "rejected"
         ? errorMessage(fiveHourResult.reason, "provider request failed")
                 : `response had no usable quota fields (${JSON_TOTALS_FIELD_HINT})`;
-            errors.push(`5h usage fetch failed (${reason}).`);
+            errors.push(`Could not refresh 5h usage (${reason}).`);
             return fallbackWindowFromAccount(account, "fiveHour", normalizeLimit(providerConfig.fiveHourLimit));
           })();
 
@@ -1496,7 +1508,7 @@ export class ProviderUsageService {
               weeklyResult.status === "rejected"
         ? errorMessage(weeklyResult.reason, "provider request failed")
                 : `response had no usable quota fields (${JSON_TOTALS_FIELD_HINT})`;
-            errors.push(`7d usage fetch failed (${reason}).`);
+            errors.push(`Could not refresh 7d usage (${reason}).`);
             return fallbackWindowFromAccount(account, "weekly", normalizeLimit(providerConfig.weeklyLimit));
           })();
 
@@ -1577,7 +1589,7 @@ export class ProviderUsageService {
         },
       );
     } catch (error) {
-      const message = errorMessage(error, "Usage fetch failed.");
+    const message = errorMessage(error, "Could not fetch live usage from provider.");
       throw new HttpError(502, "provider_usage_fetch_failed", message);
     }
 
