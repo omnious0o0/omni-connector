@@ -2540,6 +2540,8 @@ function renderAccounts(accounts) {
           ${quotaBlocks}
         </div>
 
+        ${estimateLine}
+
         <div class="account-provider-row">
           <div class="account-provider-left">
             <span class="account-provider-logo-shell ${escapeHtml(providerIdentity.logoClass)}" aria-hidden="true">
@@ -2563,8 +2565,6 @@ function renderAccounts(accounts) {
             <i data-lucide="settings-2"></i>
           </button>
         </div>
-
-        ${estimateLine}
       </article>
     `;
     })
