@@ -17,26 +17,16 @@ const modules: readonly ProviderModule[] = Object.freeze([
   openrouterProvider,
 ]);
 
-export const PROVIDER_MODULES: readonly ProviderModule[] = modules;
-
 export const PROVIDER_CATALOG: readonly ProviderDescriptor[] = Object.freeze(
-  PROVIDER_MODULES.map((providerModule) => providerModule.descriptor),
+  modules.map((providerModule) => providerModule.descriptor),
 );
 
 const moduleByProviderId = new Map<ProviderId, ProviderModule>(
-  PROVIDER_MODULES.map((providerModule) => [providerModule.descriptor.id, providerModule]),
-);
-
-const providerNameLookup = new Map<ProviderId, string>(
-  PROVIDER_CATALOG.map((provider) => [provider.id, provider.name]),
+  modules.map((providerModule) => [providerModule.descriptor.id, providerModule]),
 );
 
 export function isProviderId(value: string): value is ProviderId {
   return moduleByProviderId.has(value as ProviderId);
-}
-
-export function providerDisplayName(providerId: ProviderId): string {
-  return providerNameLookup.get(providerId) ?? providerId;
 }
 
 export function providerOAuthProfileDefinitions(providerId: ProviderId): readonly OAuthProfileDefinition[] {

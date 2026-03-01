@@ -1,6 +1,6 @@
 import { ProviderId } from "../types";
 
-export type ProviderAuthMethod = "oauth" | "api";
+type ProviderAuthMethod = "oauth" | "api";
 
 export interface ProviderDescriptor {
   id: ProviderId;
@@ -10,7 +10,7 @@ export interface ProviderDescriptor {
   warnings?: readonly string[];
 }
 
-export interface OAuthProfileDefaultsDefinition {
+interface OAuthProfileDefaultsDefinition {
   label: string;
   authorizationUrl: string;
   tokenUrl: string;
@@ -29,7 +29,7 @@ export interface OAuthProfileDefinition {
   defaults: OAuthProfileDefaultsDefinition;
 }
 
-export interface ProviderUsageDefaultsDefinition {
+interface ProviderUsageDefaultsDefinition {
   parser: "openai_usage" | "anthropic_usage" | "json_totals";
   authMode: "bearer" | "x-api-key" | "query-api-key";
   authQueryParam?: string;
