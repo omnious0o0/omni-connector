@@ -16,6 +16,31 @@ import { ProviderUsageService } from "./services/provider-usage";
 import { AccountRepository } from "./storage/account-repository";
 import { DataStore } from "./store";
 
+function sanitizeErrorLogText(input: string): string {
+  return input
+    .replace(
+      /([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]");
+}
+
+function unknownErrorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    return sanitizeErrorLogText(`${error.name}: ${error.message}`);
+  }
+
+  try {
+    return sanitizeErrorLogText(JSON.stringify(error));
+  } catch {
+    return "[unserializable error]";
+  }
+}
+
 function isResolvedConfig(config: Partial<AppConfig>): config is AppConfig {
   return (
     typeof config.host === "string" &&
@@ -316,6 +341,11 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
       res.status(error.status).type("text/plain").send(message);
       return;
     }
+
+    const detail = unknownErrorDetail(error);
+    process.stderr.write(
+      `[omni-connector] Unhandled request error ${req.method} ${req.originalUrl}: ${detail}\n`,
+    );
 
     if (shouldReturnJson) {
       res.status(500).json({

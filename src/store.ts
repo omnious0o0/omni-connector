@@ -359,7 +359,11 @@ export class DataStore {
       try {
         this.decryptSecret(value);
         return value;
-      } catch {
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "unknown decryption error";
+        process.stderr.write(
+          `Invalid encrypted secret payload marker detected during persistence; value will be re-encrypted. Reason: ${reason}\n`,
+        );
       }
     }
 

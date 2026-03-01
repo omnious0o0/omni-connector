@@ -294,7 +294,12 @@ function errorMessage(error: unknown, fallback: string): string {
         /([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi,
         "$1[redacted]",
       )
-      .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]");
+      .replace(
+        /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+        "$1[redacted]",
+      )
+      .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]")
+      .replace(/(\bBasic\s+)[A-Za-z0-9+/=._~-]+/gi, "$1[redacted]");
 
   if (error instanceof HttpError) {
     return redact(error.message);
