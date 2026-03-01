@@ -412,13 +412,13 @@ test("frontend normalized windows render one or two fields based on unique windo
 
 test("frontend weekly quota cap limits shorter quota windows", () => {
   const context = loadFrontendAppContext();
-  const account = createAccountState();
+  const exhaustedWeeklyAccount = createAccountState();
 
-  account.quota.fiveHour.used = 0;
-  account.quota.weekly.used = 100;
+  exhaustedWeeklyAccount.quota.fiveHour.used = 0;
+  exhaustedWeeklyAccount.quota.weekly.used = 100;
 
-  const windows = JSON.parse(
-    JSON.stringify(context.normalizedAccountQuotaWindows(toDashboardAccount(account))),
+  const exhaustedWindows = JSON.parse(
+    JSON.stringify(context.normalizedAccountQuotaWindows(toDashboardAccount(exhaustedWeeklyAccount))),
   ) as Array<{
     slot: string;
     ratio: number;
@@ -426,15 +426,40 @@ test("frontend weekly quota cap limits shorter quota windows", () => {
     remaining: number;
   }>;
 
-  const fiveHour = windows.find((windowView) => windowView.slot === "fiveHour");
-  const weekly = windows.find((windowView) => windowView.slot === "weekly");
+  const exhaustedFiveHour = exhaustedWindows.find((windowView) => windowView.slot === "fiveHour");
+  const exhaustedWeekly = exhaustedWindows.find((windowView) => windowView.slot === "weekly");
 
-  assert.ok(fiveHour);
-  assert.ok(weekly);
-  assert.equal(weekly?.ratio, 0);
-  assert.equal(fiveHour?.ratio, 0);
-  assert.equal(fiveHour?.value.includes("0%"), true);
-  assert.equal(fiveHour?.remaining, 0);
+  assert.ok(exhaustedFiveHour);
+  assert.ok(exhaustedWeekly);
+  assert.equal(exhaustedWeekly?.ratio, 0);
+  assert.equal(exhaustedFiveHour?.ratio, 0);
+  assert.equal(exhaustedFiveHour?.value.includes("0%"), true);
+  assert.equal(exhaustedFiveHour?.remaining, 0);
+
+  const limitedWeeklyAccount = createAccountState();
+  limitedWeeklyAccount.quota.fiveHour.limit = 100;
+  limitedWeeklyAccount.quota.fiveHour.used = 0;
+  limitedWeeklyAccount.quota.weekly.limit = 1000;
+  limitedWeeklyAccount.quota.weekly.used = 950;
+
+  const limitedWindows = JSON.parse(
+    JSON.stringify(context.normalizedAccountQuotaWindows(toDashboardAccount(limitedWeeklyAccount))),
+  ) as Array<{
+    slot: string;
+    ratio: number;
+    value: string;
+    remaining: number;
+  }>;
+
+  const limitedFiveHour = limitedWindows.find((windowView) => windowView.slot === "fiveHour");
+  const limitedWeekly = limitedWindows.find((windowView) => windowView.slot === "weekly");
+
+  assert.ok(limitedFiveHour);
+  assert.ok(limitedWeekly);
+  assert.equal(Math.round((limitedWeekly?.ratio ?? 0) * 100), 5);
+  assert.equal(Math.round((limitedFiveHour?.ratio ?? 0) * 100), 50);
+  assert.equal(limitedFiveHour?.remaining, 50);
+  assert.equal(limitedFiveHour?.value.includes("50%"), true);
 });
 
 test("frontend sidebar model helpers normalize IDs and queries", () => {
