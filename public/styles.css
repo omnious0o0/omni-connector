@@ -20,16 +20,26 @@
   --secondary-hover: #3f3f46;
   --secondary-text: #f4f4f5;
   
-  --warn-base: #ef4444;
-  --warn-bg: rgba(239, 68, 68, 0.1);
-  --warn-border: rgba(239, 68, 68, 0.3);
-  --warn-text: #fecaca;
+  --warning-base: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-border: rgba(245, 158, 11, 0.35);
+  --warning-text: #fef3c7;
+
+  --error-base: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.12);
+  --error-border: rgba(239, 68, 68, 0.35);
+  --error-text: #fecaca;
+
+  --info-base: #60a5fa;
+  --info-bg: rgba(59, 130, 246, 0.14);
+  --info-border: rgba(59, 130, 246, 0.35);
+  --info-text: #bfdbfe;
 
   --surface-hover-soft: rgba(255, 255, 255, 0.03);
   --surface-hover-muted: rgba(255, 255, 255, 0.015);
 
   --tooltip-bg: #161a21;
-  --tooltip-border: rgba(252, 165, 165, 0.38);
+  --tooltip-border: var(--warning-border);
   --tooltip-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 
   --motion-fast: 0.16s;
@@ -345,7 +355,7 @@ body.resizing-sidebar {
 .sidebar-model-provider-error {
   margin: 0;
   font-size: 0.7rem;
-  color: var(--warn-text);
+  color: var(--error-text);
 }
 
 .side-tab {
@@ -467,9 +477,9 @@ body.resizing-sidebar {
   border-color: var(--border-light);
 }
 .btn-icon.text-warn:hover {
-  color: var(--warn-base);
-  background: var(--warn-bg);
-  border-color: var(--warn-border);
+  color: var(--warning-base);
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
 }
 
 .btn-disabled {
@@ -517,7 +527,61 @@ body.resizing-sidebar {
 }
 
 .topbar-left {
-  width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.topbar-issues-empty {
+  display: inline-flex;
+  align-items: center;
+  color: var(--positive-base);
+}
+
+.topbar-issue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  padding: 2px 5px;
+  min-height: 20px;
+  cursor: pointer;
+}
+
+.topbar-issue-btn .lucide {
+  width: 12px;
+  height: 12px;
+}
+
+.topbar-issue-count {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+}
+
+.topbar-issue-btn.is-error {
+  color: var(--error-text);
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.topbar-issue-btn.is-warning {
+  color: var(--warning-base);
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.topbar-issue-btn.is-info {
+  color: var(--info-base);
+  border-color: var(--info-border);
+  background: var(--info-bg);
+}
+
+.topbar-issue-btn:hover {
+  filter: brightness(1.08);
 }
 
 .topbar-time {
@@ -668,7 +732,7 @@ body.resizing-sidebar {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 10px;
-  align-items: start;
+  align-items: stretch;
   align-content: start;
   justify-content: start;
   grid-auto-rows: min-content;
@@ -700,7 +764,7 @@ body.resizing-sidebar {
   gap: 6px;
   min-height: 0;
   aspect-ratio: auto;
-  height: auto;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -789,6 +853,22 @@ body.accounts-density-comfortable .account-card {
   flex-shrink: 0;
 }
 
+.account-issue-btn {
+  padding: 4px;
+}
+
+.account-issue-btn.error {
+  color: var(--error-text);
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.account-issue-btn.warn {
+  color: var(--warning-base);
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
 .account-state-dot {
   width: 8px;
   height: 8px;
@@ -826,6 +906,7 @@ body.accounts-density-comfortable .account-card {
   background: var(--bg-element);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
+  min-height: 62px;
 }
 
 .quota-clean-head {
@@ -1144,12 +1225,12 @@ body.accounts-density-comfortable .account-card {
 }
 
 .toast.error {
-  border-color: var(--warn-border);
+  border-color: var(--error-border);
   background: rgba(239, 68, 68, 0.15);
 }
 
 .toast.error .toast-icon {
-  color: var(--warn-base);
+  color: var(--error-base);
 }
 
 .toast-icon {
@@ -1283,11 +1364,11 @@ body.accounts-density-comfortable .account-card {
   justify-content: center;
   width: 19px;
   height: 19px;
-  border: 1px solid var(--warn-border);
-  background: var(--warn-bg);
-  color: var(--warn-text);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-base);
   border-radius: var(--radius-sm);
-  cursor: help;
+  cursor: pointer;
   padding: 0;
   transition:
     background-color var(--motion-fast) var(--easing-standard),
@@ -1303,9 +1384,9 @@ body.accounts-density-comfortable .account-card {
 
 .connect-provider-warning-trigger:hover,
 .connect-provider-warning-anchor:focus-within .connect-provider-warning-trigger {
-  background: rgba(239, 68, 68, 0.2);
-  border-color: rgba(239, 68, 68, 0.55);
-  color: var(--warn-text);
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.55);
+  color: var(--warning-text);
   transform: translateY(-1px);
 }
 
@@ -1315,17 +1396,32 @@ body.accounts-density-comfortable .account-card {
   width: min(320px, calc(100vw - 24px));
   border: 1px solid var(--tooltip-border);
   background: var(--tooltip-bg);
-  color: var(--warn-text);
+  color: var(--warning-text);
   box-shadow: var(--tooltip-shadow);
   padding: 8px 10px;
-  pointer-events: none;
+  pointer-events: auto;
+}
+
+.connect-provider-warning-floating.is-warning {
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+}
+
+.connect-provider-warning-floating.is-error {
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
+
+.connect-provider-warning-floating.is-info {
+  border-color: var(--info-border);
+  color: var(--info-text);
 }
 
 .connect-provider-warning-title {
   font-size: 0.72rem;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: var(--warn-text);
+  color: inherit;
   margin-bottom: 5px;
 }
 
@@ -1339,8 +1435,14 @@ body.accounts-density-comfortable .account-card {
 .connect-provider-warning-floating li {
   margin: 0;
   font-size: 0.75rem;
-  color: var(--warn-text);
+  color: inherit;
   overflow-wrap: anywhere;
+}
+
+.connect-provider-warning-action {
+  margin-top: 8px;
+  width: 100%;
+  min-height: 30px;
 }
 
 .connect-provider-recommended {
@@ -1702,7 +1804,7 @@ body.accounts-density-comfortable .account-card {
   }
 
   .topbar-left {
-    display: none;
+    justify-self: start;
   }
 
   .topbar-status {

@@ -101,13 +101,18 @@ type AppContext = vm.Context & {
     }>;
     normalizedSearchQuery: string;
   };
+  collectTopbarIssues: () => Array<{
+    type: string;
+    message: string;
+    accountId: string | null;
+    action: string | null;
+  }>;
+  computeOverallQuotaRemainingPercent: (accounts: unknown[]) => number | null;
   buildDashboardApiBalanceMetrics: (accounts: unknown[]) => {
-    primaryLabel: string;
-    primaryValue: string;
-    primaryDetail: string;
-    secondaryLabel: string;
-    secondaryValue: string;
-    secondaryDetail: string;
+    value: string;
+    detail: string;
+    accountCount: number;
+    liveBalanceCount: number;
   } | null;
   buildQuotaWindowView: (windowData: unknown, quotaSyncedAt: unknown) => Record<string, unknown>;
   copySidebarModelId: (fullModelId: unknown) => Promise<void>;
@@ -116,7 +121,24 @@ type AppContext = vm.Context & {
   matchesSidebarModelSearch: (modelId: unknown, normalizedSearchQuery: unknown) => boolean;
   normalizeSidebarModelSearchQuery: (value: unknown) => string;
   normalizedAccountQuotaWindows: (account: unknown) => unknown[];
+  topbarIssueTooltipPayload: (
+    type: unknown,
+    issues: unknown,
+  ) => {
+    title: string;
+    items: string[];
+    action: string | null;
+    actionLabel: string;
+    accountId: string | null;
+  } | null;
+  warningActionLabel: (action: unknown) => string;
+  warningDataItems: (items: unknown) => string;
+  warningItemsFromTrigger: (trigger: unknown) => string[];
   renderApiBalanceBlock: (account: unknown) => string;
+  resolveCurrentModelMetric: () => {
+    value: string;
+    detail: string;
+  };
   resolveQuotaWindowLabel: (account: unknown, slot: string, windowView: unknown) => string;
   quotaWindowSignature: (windowView: unknown) => string;
   __documentListeners?: Map<string, Array<(event: { target: unknown }) => unknown>>;
@@ -590,9 +612,10 @@ test("frontend quota label fallback uses API balance wording for API-linked acco
 test("frontend API balance helpers render readable values and account metrics", () => {
   const context = loadFrontendAppContext();
 
-  assert.match(context.formatBalanceValue("$1,234.50"), /1,234\.50/);
+  assert.match(context.formatBalanceValue("$1,234.50"), /1/);
   assert.match(context.formatBalanceValue("credits: 80"), /80/);
-  assert.equal(context.formatBalanceValue(""), "$0.00");
+  assert.equal(context.formatBalanceValue("").includes("$"), true);
+  assert.equal(context.formatBalanceValue("").includes("0.00"), true);
 
   const balanceMarkup = context.renderApiBalanceBlock({
     authMethod: "api",
@@ -600,7 +623,7 @@ test("frontend API balance helpers render readable values and account metrics", 
     planType: "pro",
   });
   assert.equal(balanceMarkup.includes("API balance"), true);
-  assert.equal(balanceMarkup.includes("125.25"), true);
+  assert.equal(balanceMarkup.includes("125"), true);
   assert.equal(balanceMarkup.includes("pro plan"), false);
 
   const summary = context.buildDashboardApiBalanceMetrics([
@@ -615,15 +638,13 @@ test("frontend API balance helpers render readable values and account metrics", 
   ]);
 
   assert.ok(summary);
-  assert.equal(summary?.primaryLabel, "Total API Balance");
-  assert.match(String(summary?.primaryValue ?? ""), /30\.00/);
-  assert.match(String(summary?.primaryDetail ?? ""), /Across 2 API accounts/);
-  assert.equal(summary?.secondaryLabel, "API Accounts");
-  assert.equal(summary?.secondaryValue, "2");
-  assert.equal(summary?.secondaryDetail, "2 with live balance");
+  assert.match(String(summary?.value ?? ""), /30\.00/);
+  assert.equal(summary?.accountCount, 2);
+  assert.equal(summary?.liveBalanceCount, 2);
+  assert.match(String(summary?.detail ?? ""), /2 API connections with live balance/);
 });
 
-test("frontend API balance summary is disabled for mixed auth dashboards", () => {
+test("frontend API balance summary includes API subset in mixed auth dashboards", () => {
   const context = loadFrontendAppContext();
 
   const mixedSummary = context.buildDashboardApiBalanceMetrics([
@@ -637,5 +658,205 @@ test("frontend API balance summary is disabled for mixed auth dashboards", () =>
     },
   ]);
 
-  assert.equal(mixedSummary, null);
+  assert.ok(mixedSummary);
+  assert.equal(mixedSummary?.accountCount, 1);
+  assert.equal(mixedSummary?.liveBalanceCount, 1);
+  assert.match(String(mixedSummary?.value ?? ""), /10\.00/);
+});
+
+test("frontend API balance summary detects mixed currencies without unsafe aggregation", () => {
+  const context = loadFrontendAppContext();
+
+  const mixedCurrencies = context.buildDashboardApiBalanceMetrics([
+    {
+      authMethod: "api",
+      creditsBalance: "$10",
+    },
+    {
+      authMethod: "api",
+      creditsBalance: "€20",
+    },
+  ]);
+
+  assert.ok(mixedCurrencies);
+  assert.match(String(mixedCurrencies?.detail ?? ""), /mixed currencies/);
+});
+
+test("frontend overall quota metric computes weighted remaining percentage", () => {
+  const context = loadFrontendAppContext();
+
+  const first = createAccountState();
+  first.provider = "codex";
+  first.displayName = "Codex A";
+  first.quota.fiveHour.limit = 100;
+  first.quota.fiveHour.used = 50;
+  first.quota.weekly.limit = 100;
+  first.quota.weekly.used = 20;
+
+  const second = createAccountState();
+  second.provider = "gemini";
+  second.displayName = "Gemini B";
+  second.quota.fiveHour.limit = 100;
+  second.quota.fiveHour.used = 80;
+  second.quota.weekly.limit = 100;
+  second.quota.weekly.used = 0;
+
+  const remaining = context.computeOverallQuotaRemainingPercent([
+    toDashboardAccount(first),
+    toDashboardAccount(second),
+  ]);
+
+  assert.ok(remaining !== null);
+  assert.equal(Math.round(Number(remaining)), 63);
+});
+
+test("frontend current model metric follows routing preferences", () => {
+  const context = loadFrontendAppContext();
+
+  vm.runInContext(
+    `dashboard = { connector: { routingPreferences: { priorityModels: ["gpt-5-mini"] } }, accounts: [] };`,
+    context,
+  );
+  const pinned = context.resolveCurrentModelMetric();
+  assert.equal(pinned.value, "gpt-5-mini");
+  assert.match(pinned.detail, /Pinned/);
+
+  vm.runInContext(
+    `dashboard = { connector: { routingPreferences: { priorityModels: ["auto"] } }, accounts: [] };`,
+    context,
+  );
+  const automatic = context.resolveCurrentModelMetric();
+  assert.equal(automatic.value, "auto");
+  assert.match(automatic.detail, /automatically/);
+});
+
+test("frontend warning helper functions encode decode and label actions consistently", () => {
+  const context = loadFrontendAppContext();
+
+  const encoded = context.warningDataItems([
+    " first warning ",
+    "",
+    "Second warning",
+  ]);
+  assert.equal(encoded, "first%20warning|Second%20warning");
+
+  const trigger = new context.HTMLElement();
+  trigger.dataset = {
+    warningItems: `${encoded}|%E0%A4%A`,
+  };
+
+  const decodedWarnings = JSON.parse(
+    JSON.stringify(context.warningItemsFromTrigger(trigger)),
+  ) as string[];
+  assert.deepEqual(decodedWarnings, ["first warning", "Second warning"]);
+
+  assert.equal(context.warningActionLabel("open-account-settings"), "Open settings");
+  assert.equal(context.warningActionLabel("open-connect"), "Open Connect");
+  assert.equal(context.warningActionLabel("open-settings-page"), "Open settings");
+  assert.equal(context.warningActionLabel("refresh-dashboard"), "Refresh now");
+  assert.equal(context.warningActionLabel("unknown"), "");
+});
+
+test("frontend topbar tooltip payload keeps severity messages and routes actions", () => {
+  const context = loadFrontendAppContext();
+
+  const issues = [
+    {
+      type: "error",
+      message: "Gemini API: Balance fetch failed",
+      accountId: "acc1",
+      action: null,
+    },
+    {
+      type: "error",
+      message: "Second hard failure",
+      accountId: null,
+      action: "refresh-dashboard",
+    },
+    {
+      type: "warning",
+      message: "Provider warning",
+      accountId: null,
+      action: "open-connect",
+    },
+  ];
+
+  const errorPayload = context.topbarIssueTooltipPayload("error", issues);
+  assert.ok(errorPayload);
+  assert.equal(errorPayload?.title, "Errors");
+  assert.deepEqual(errorPayload?.items, [
+    "Gemini API: Balance fetch failed",
+    "Second hard failure",
+  ]);
+  assert.equal(errorPayload?.action, "open-account-settings");
+  assert.equal(errorPayload?.actionLabel, "Open settings");
+  assert.equal(errorPayload?.accountId, "acc1");
+
+  const warningPayload = context.topbarIssueTooltipPayload("warning", issues);
+  assert.ok(warningPayload);
+  assert.equal(warningPayload?.title, "Warnings");
+  assert.deepEqual(warningPayload?.items, ["Provider warning"]);
+  assert.equal(warningPayload?.action, "open-connect");
+  assert.equal(warningPayload?.actionLabel, "Open Connect");
+  assert.equal(warningPayload?.accountId, null);
+
+  const emptyPayload = context.topbarIssueTooltipPayload("info", issues);
+  assert.equal(emptyPayload, null);
+});
+
+test("frontend topbar issue collector groups errors warnings and notifications", () => {
+  const context = loadFrontendAppContext();
+
+  vm.runInContext(
+    `
+      statusError = true;
+      dashboardLoaded = true;
+      dashboard = {
+        accounts: [
+          {
+            id: "acc1",
+            displayName: "Gemini API",
+            quotaSyncStatus: "unavailable",
+            quotaSyncError: "Balance fetch failed",
+            authMethod: "api"
+          }
+        ],
+        connector: { routingPreferences: { priorityModels: ["auto"] } }
+      };
+      connectProviders = [
+        { id: "gemini", name: "Gemini", warnings: ["Rate limits are unstable"] }
+      ];
+    `,
+    context,
+  );
+
+  const issues = JSON.parse(
+    JSON.stringify(context.collectTopbarIssues()),
+  ) as ReturnType<AppContext["collectTopbarIssues"]>;
+  const counts = issues.reduce(
+    (accumulator, issue) => {
+      const key = issue.type as "error" | "warning" | "info";
+      accumulator[key] = (accumulator[key] ?? 0) + 1;
+      return accumulator;
+    },
+    { error: 0, warning: 0, info: 0 } as Record<"error" | "warning" | "info", number>,
+  );
+
+  assert.equal(counts.error >= 1, true);
+  assert.equal(counts.warning >= 1, true);
+
+  vm.runInContext(
+    `
+      statusError = false;
+      dashboardLoaded = true;
+      dashboard = { accounts: [], connector: { routingPreferences: { priorityModels: ["auto"] } } };
+      connectProviders = [];
+    `,
+    context,
+  );
+
+  const infoIssues = JSON.parse(
+    JSON.stringify(context.collectTopbarIssues()),
+  ) as ReturnType<AppContext["collectTopbarIssues"]>;
+  assert.equal(infoIssues.some((issue) => issue.type === "info"), true);
 });

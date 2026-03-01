@@ -5,6 +5,7 @@ const appLayoutElement = document.querySelector(".app-layout");
 const mainContentElement = document.querySelector(".main-content");
 const sidebarResizer = document.querySelector("#sidebar-resizer");
 const topbarTimeElement = document.querySelector("#topbar-time");
+const topbarIssuesElement = document.querySelector("#topbar-issues");
 const topbarStatusElement = document.querySelector("#topbar-status");
 const topbarStatusTextElement = document.querySelector("#topbar-status-text");
 const dashboardViewElement = document.querySelector("#dashboard-view");
@@ -60,8 +61,6 @@ const accountSettingsSyncGuidanceStepsElement = document.querySelector("#account
 const accountSettingsSyncGuidanceActionElement = document.querySelector("#account-settings-sync-guidance-action");
 const accountSettingsDisplayNameInput = document.querySelector("#account-settings-display-name");
 const accountSettingsCancelButton = document.querySelector("#account-settings-cancel");
-const metricWindowALabelElement = document.querySelector("#metric-window-a-label");
-const metricWindowBLabelElement = document.querySelector("#metric-window-b-label");
 
 let dashboard = null;
 let toastTimer = null;
@@ -97,12 +96,14 @@ let selectedAccountSettingsId = null;
 let strictLiveQuotaEnabled = false;
 let connectWarningTooltipElement = null;
 let activeWarningTrigger = null;
+let connectWarningTooltipHideTimer = null;
 let connectedProviderModelsPayload = {
   providers: [],
 };
 let connectedProviderModelsError = null;
 let sidebarModelsSearchQuery = "";
 let quotaCadenceConsensusByScope = new Map();
+let latestTopbarIssues = [];
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -204,6 +205,88 @@ function warningItemsFromTrigger(trigger) {
     .filter((item) => item.length > 0);
 }
 
+function warningTitleFromTrigger(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return "Warnings";
+  }
+
+  const title = typeof trigger.dataset.warningTitle === "string" ? trigger.dataset.warningTitle.trim() : "";
+  return title.length > 0 ? title : "Warnings";
+}
+
+function warningSeverityFromTrigger(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return "warning";
+  }
+
+  const raw = typeof trigger.dataset.warningSeverity === "string" ? trigger.dataset.warningSeverity.trim() : "";
+  if (raw === "error" || raw === "info") {
+    return raw;
+  }
+
+  return "warning";
+}
+
+function warningActionFromTrigger(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return null;
+  }
+
+  const action = typeof trigger.dataset.warningAction === "string" ? trigger.dataset.warningAction.trim() : "";
+  return action.length > 0 ? action : null;
+}
+
+function warningActionLabelFromTrigger(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return "";
+  }
+
+  const label = typeof trigger.dataset.warningActionLabel === "string" ? trigger.dataset.warningActionLabel.trim() : "";
+  return label;
+}
+
+function warningAccountIdFromTrigger(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return null;
+  }
+
+  const accountId = typeof trigger.dataset.warningAccountId === "string" ? trigger.dataset.warningAccountId.trim() : "";
+  return accountId.length > 0 ? accountId : null;
+}
+
+function warningDataItems(items) {
+  if (!Array.isArray(items)) {
+    return "";
+  }
+
+  return items
+    .filter((item) => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => encodeURIComponent(item))
+    .join("|");
+}
+
+function warningActionLabel(action) {
+  if (action === "open-account-settings") {
+    return "Open settings";
+  }
+
+  if (action === "open-connect") {
+    return "Open Connect";
+  }
+
+  if (action === "open-settings-page") {
+    return "Open settings";
+  }
+
+  if (action === "refresh-dashboard") {
+    return "Refresh now";
+  }
+
+  return "";
+}
+
 function ensureConnectWarningTooltipElement() {
   if (connectWarningTooltipElement instanceof HTMLElement) {
     return connectWarningTooltipElement;
@@ -214,9 +297,59 @@ function ensureConnectWarningTooltipElement() {
   element.className = "connect-provider-warning-floating";
   element.hidden = true;
   element.setAttribute("role", "tooltip");
+  element.addEventListener("mouseenter", () => {
+    clearConnectWarningTooltipHideTimer();
+  });
+  element.addEventListener("mouseleave", (event) => {
+    const nextTarget = event.relatedTarget;
+    if (activeWarningTrigger instanceof HTMLElement && nextTarget instanceof Node && activeWarningTrigger.contains(nextTarget)) {
+      return;
+    }
+
+    scheduleConnectWarningTooltipHide();
+  });
+  element.addEventListener("click", async (event) => {
+    const target = event.target;
+    const targetElement = target instanceof HTMLElement ? target : target.parentElement;
+    if (!(targetElement instanceof HTMLElement)) {
+      return;
+    }
+
+    const actionButton = targetElement.closest("[data-warning-action]");
+    if (!(actionButton instanceof HTMLElement)) {
+      return;
+    }
+
+    event.preventDefault();
+    const action = warningActionFromTrigger(actionButton);
+    const accountId = warningAccountIdFromTrigger(actionButton);
+    hideConnectWarningTooltip();
+    await resolveIssueAction(action, accountId);
+  });
   document.body.append(element);
   connectWarningTooltipElement = element;
   return element;
+}
+
+function clearConnectWarningTooltipHideTimer() {
+  if (connectWarningTooltipHideTimer !== null) {
+    window.clearTimeout(connectWarningTooltipHideTimer);
+    connectWarningTooltipHideTimer = null;
+  }
+}
+
+function scheduleConnectWarningTooltipHide() {
+  clearConnectWarningTooltipHideTimer();
+  connectWarningTooltipHideTimer = window.setTimeout(() => {
+    const tooltipHovered =
+      connectWarningTooltipElement instanceof HTMLElement && connectWarningTooltipElement.matches(":hover");
+    const triggerHovered = activeWarningTrigger instanceof HTMLElement && activeWarningTrigger.matches(":hover");
+    if (tooltipHovered || triggerHovered) {
+      return;
+    }
+
+    hideConnectWarningTooltip();
+  }, 120);
 }
 
 function positionConnectWarningTooltip(trigger, tooltip) {
@@ -252,6 +385,8 @@ function positionConnectWarningTooltip(trigger, tooltip) {
 }
 
 function hideConnectWarningTooltip() {
+  clearConnectWarningTooltipHideTimer();
+
   if (activeWarningTrigger instanceof HTMLElement) {
     setDescribedByToken(activeWarningTrigger, CONNECT_WARNING_TOOLTIP_ID, false);
   }
@@ -267,6 +402,8 @@ function hideConnectWarningTooltip() {
 }
 
 function showConnectWarningTooltip(trigger) {
+  clearConnectWarningTooltipHideTimer();
+
   const items = warningItemsFromTrigger(trigger);
   if (items.length === 0) {
     hideConnectWarningTooltip();
@@ -278,11 +415,22 @@ function showConnectWarningTooltip(trigger) {
   }
 
   const tooltip = ensureConnectWarningTooltipElement();
+  const severity = warningSeverityFromTrigger(trigger);
+  const title = warningTitleFromTrigger(trigger);
+  const action = warningActionFromTrigger(trigger);
+  const actionLabel = warningActionLabelFromTrigger(trigger);
+  const accountId = warningAccountIdFromTrigger(trigger);
+  tooltip.className = `connect-provider-warning-floating is-${severity}`;
+  const actionMarkup =
+    action && actionLabel
+      ? `<button class="btn btn-outline connect-provider-warning-action" type="button" data-warning-action="${escapeHtml(action)}" ${accountId ? `data-warning-account-id="${escapeHtml(accountId)}"` : ""}>${escapeHtml(actionLabel)}</button>`
+      : "";
   tooltip.innerHTML = `
-    <p class="connect-provider-warning-title">Warnings</p>
+    <p class="connect-provider-warning-title">${escapeHtml(title)}</p>
     <ul>
       ${items.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
     </ul>
+    ${actionMarkup}
   `;
   tooltip.hidden = false;
   positionConnectWarningTooltip(trigger, tooltip);
@@ -290,31 +438,91 @@ function showConnectWarningTooltip(trigger) {
   activeWarningTrigger = trigger;
 }
 
-function bindConnectWarningTriggers() {
-  if (!(connectProviderListElement instanceof HTMLElement)) {
+async function resolveIssueAction(action, accountId = null) {
+  if (action === "open-account-settings") {
+    if (typeof accountId === "string" && accountId.length > 0) {
+      openAccountSettingsModal(accountId);
+      return;
+    }
+
+    showToast("Connection settings are unavailable.", true);
     return;
   }
 
-  const triggers = connectProviderListElement.querySelectorAll(".connect-provider-warning-trigger");
+  if (action === "open-connect") {
+    openConnectModal();
+    return;
+  }
+
+  if (action === "open-settings-page") {
+    if (isConnectModalOpen()) {
+      closeConnectModal();
+    }
+
+    setActiveView("settings");
+    return;
+  }
+
+  if (action === "refresh-dashboard") {
+    try {
+      await loadDashboard();
+      showToast("Dashboard refreshed.");
+    } catch (error) {
+      showToast(error.message || "Refresh failed.", true);
+    }
+  }
+}
+
+function bindConnectWarningTriggers() {
+  const triggers = document.querySelectorAll(".issue-tooltip-trigger");
   for (const trigger of triggers) {
     if (!(trigger instanceof HTMLElement)) {
       continue;
     }
 
+    if (trigger.dataset.warningBound === "1") {
+      continue;
+    }
+
+    trigger.dataset.warningBound = "1";
+
     trigger.addEventListener("mouseenter", () => {
       showConnectWarningTooltip(trigger);
     });
 
-    trigger.addEventListener("mouseleave", () => {
-      hideConnectWarningTooltip();
+    trigger.addEventListener("mouseleave", (event) => {
+      const nextTarget = event.relatedTarget;
+      if (
+        connectWarningTooltipElement instanceof HTMLElement &&
+        nextTarget instanceof Node &&
+        connectWarningTooltipElement.contains(nextTarget)
+      ) {
+        return;
+      }
+
+      scheduleConnectWarningTooltipHide();
     });
 
     trigger.addEventListener("focus", () => {
       showConnectWarningTooltip(trigger);
     });
 
-    trigger.addEventListener("blur", () => {
-      hideConnectWarningTooltip();
+    trigger.addEventListener("blur", (event) => {
+      const nextTarget = event.relatedTarget;
+      if (
+        connectWarningTooltipElement instanceof HTMLElement &&
+        nextTarget instanceof Node &&
+        connectWarningTooltipElement.contains(nextTarget)
+      ) {
+        return;
+      }
+
+      scheduleConnectWarningTooltipHide();
+    });
+
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      showConnectWarningTooltip(trigger);
     });
   }
 }
@@ -670,18 +878,240 @@ function setTopbarStatus(state) {
   }
 }
 
+function normalizeTopbarIssueMessage(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function collectTopbarIssues() {
+  const dedupe = new Set();
+  const issues = [];
+
+  if (statusError) {
+    issues.push({
+      type: "error",
+      message: "Dashboard request failed. Click to retry loading.",
+      action: "refresh-dashboard",
+    });
+  }
+
+  if (dashboard && Array.isArray(dashboard.accounts)) {
+    for (const account of dashboard.accounts) {
+      const syncError = normalizeTopbarIssueMessage(account?.quotaSyncError);
+      if (!syncError || account?.quotaSyncStatus === "live") {
+        continue;
+      }
+
+      const issueType = account?.quotaSyncStatus === "stale" ? "warning" : "error";
+      issues.push({
+        type: issueType,
+        message: `${maskDisplayName(account?.displayName)}: ${syncError}`,
+        accountId: account?.id,
+      });
+    }
+
+    if (dashboardLoaded && dashboard.accounts.length === 0) {
+      issues.push({
+        type: "info",
+        message: "No connections configured yet. Click to open Connect.",
+        action: "open-connect",
+      });
+    }
+  }
+
+  if (Array.isArray(connectProviders) && connectProviders.length > 0) {
+    for (const provider of connectProviders) {
+      const providerWarnings = Array.isArray(provider?.warnings)
+        ? provider.warnings
+            .filter((warning) => typeof warning === "string")
+            .map((warning) => warning.trim())
+            .filter((warning) => warning.length > 0)
+        : [];
+
+      if (providerWarnings.length === 0) {
+        continue;
+      }
+
+      const providerName =
+        typeof provider?.name === "string" && provider.name.trim().length > 0 ? provider.name.trim() : provider?.id;
+
+      for (const warning of providerWarnings.slice(0, 2)) {
+        issues.push({
+          type: "warning",
+          message: `${providerName}: ${warning}`,
+          action: "open-connect",
+        });
+      }
+    }
+  }
+
+  const normalized = [];
+  for (const issue of issues) {
+    const message = normalizeTopbarIssueMessage(issue?.message);
+    if (!message) {
+      continue;
+    }
+
+    const type = issue?.type === "error" || issue?.type === "warning" ? issue.type : "info";
+    const key = `${type}|${message}`;
+    if (dedupe.has(key)) {
+      continue;
+    }
+
+    dedupe.add(key);
+    normalized.push({
+      type,
+      message,
+      accountId: typeof issue?.accountId === "string" ? issue.accountId : null,
+      action: typeof issue?.action === "string" ? issue.action : null,
+    });
+  }
+
+  return normalized;
+}
+
+function topbarIssueSummaryLabel(type) {
+  if (type === "error") {
+    return "Errors";
+  }
+
+  if (type === "warning") {
+    return "Warnings";
+  }
+
+  return "Notifications";
+}
+
+function topbarIssueIcon(type) {
+  if (type === "error") {
+    return "circle-alert";
+  }
+
+  if (type === "warning") {
+    return "triangle-alert";
+  }
+
+  return "info";
+}
+
+function topbarIssueTooltipPayload(type, issues) {
+  const relevant = issues.filter((issue) => issue.type === type);
+  if (relevant.length === 0) {
+    return null;
+  }
+
+  const primaryIssue = relevant[0] ?? null;
+  const action =
+    typeof primaryIssue?.accountId === "string" && primaryIssue.accountId.length > 0
+      ? "open-account-settings"
+      : typeof primaryIssue?.action === "string" && primaryIssue.action.length > 0
+        ? primaryIssue.action
+        : null;
+
+  return {
+    title: topbarIssueSummaryLabel(type),
+    items: relevant.slice(0, 3).map((issue) => issue.message),
+    action,
+    actionLabel: warningActionLabel(action),
+    accountId:
+      typeof primaryIssue?.accountId === "string" && primaryIssue.accountId.length > 0
+        ? primaryIssue.accountId
+        : null,
+  };
+}
+
+function renderTopbarIssues() {
+  if (!(topbarIssuesElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const issues = collectTopbarIssues();
+  latestTopbarIssues = issues;
+  const order = ["error", "warning", "info"];
+  const issueButtons = order
+    .map((type) => {
+      const count = issues.filter((issue) => issue.type === type).length;
+      if (count === 0) {
+        return "";
+      }
+
+      const label = topbarIssueSummaryLabel(type);
+      const tooltip = topbarIssueTooltipPayload(type, issues);
+      const warningItems = warningDataItems(tooltip?.items ?? []);
+      const warningTitle = tooltip?.title ?? label;
+      const warningAction = tooltip?.action ?? "";
+      const warningActionLabelText = tooltip?.actionLabel ?? "";
+      const warningAccountId = tooltip?.accountId ?? "";
+      const actionAttrs =
+        warningAction && warningActionLabelText
+          ? ` data-warning-action="${escapeHtml(warningAction)}" data-warning-action-label="${escapeHtml(warningActionLabelText)}"`
+          : "";
+      const accountAttr = warningAccountId
+        ? ` data-warning-account-id="${escapeHtml(warningAccountId)}"`
+        : "";
+
+      return `<button class="topbar-issue-btn issue-tooltip-trigger is-${escapeHtml(type)}" type="button" data-topbar-issue-type="${escapeHtml(type)}" aria-label="${escapeHtml(label)}: ${escapeHtml(String(count))}" data-warning-title="${escapeHtml(warningTitle)}" data-warning-severity="${escapeHtml(type)}" data-warning-items="${warningItems}"${actionAttrs}${accountAttr}><i data-lucide="${escapeHtml(topbarIssueIcon(type))}"></i><span class="topbar-issue-count">${escapeHtml(String(count))}</span></button>`;
+    })
+    .filter((markup) => markup.length > 0)
+    .join("");
+
+  topbarIssuesElement.innerHTML =
+    issueButtons.length > 0
+      ? issueButtons
+      : '<span class="topbar-issues-empty" aria-label="No active warnings, errors, or notifications"><i data-lucide="circle-check"></i></span>';
+  bindConnectWarningTriggers();
+  reRenderIcons();
+}
+
+function firstTopbarIssueByType(issueType) {
+  if (issueType !== "error" && issueType !== "warning" && issueType !== "info") {
+    return null;
+  }
+
+  return latestTopbarIssues.find((issue) => issue.type === issueType) ?? null;
+}
+
+async function resolveTopbarIssue(issueType) {
+  const issue = firstTopbarIssueByType(issueType);
+  if (!issue) {
+    showToast("No active issue for that category.");
+    return;
+  }
+
+  if (issue.accountId) {
+    openAccountSettingsModal(issue.accountId);
+    showToast(issue.message, issue.type === "error");
+    return;
+  }
+
+  if (issue.action === "open-connect") {
+    openConnectModal();
+    showToast(issue.message, issue.type === "error");
+    return;
+  }
+
+  if (issue.action === "refresh-dashboard") {
+    try {
+      await loadDashboard();
+      showToast("Dashboard refreshed.");
+    } catch (error) {
+      showToast(error.message || "Refresh failed.", true);
+    }
+    return;
+  }
+
+  showToast(issue.message, issue.type === "error");
+}
+
 function refreshTopbarStatus() {
   if (statusError || providerConfigured === false) {
     setTopbarStatus("offline");
-    return;
-  }
-
-  if (!dashboardLoaded || providerConfigured === null) {
+  } else if (!dashboardLoaded || providerConfigured === null) {
     setTopbarStatus("preparing");
-    return;
+  } else {
+    setTopbarStatus("online");
   }
 
-  setTopbarStatus("online");
+  renderTopbarIssues();
 }
 
 function showToast(message, isError = false) {
@@ -1811,49 +2241,44 @@ function buildDashboardWindowMetrics(accounts) {
     });
 }
 
-function metricCadenceLabel(metric) {
-  const rawCadenceMinutes = Number(metric?.cadenceMinutes);
-  if (Number.isFinite(rawCadenceMinutes) && rawCadenceMinutes > 0) {
-    const cadenceLabel = cadenceLabelFromMinutes(rawCadenceMinutes);
-    if (cadenceLabel.length > 0) {
-      return cadenceLabel;
+function computeOverallQuotaRemainingPercent(accounts) {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return null;
+  }
+
+  let totalLimit = 0;
+  let totalRemaining = 0;
+  let ratioSum = 0;
+  let ratioCount = 0;
+
+  for (const account of accounts) {
+    const windows = normalizedAccountQuotaWindows(account);
+    for (const windowView of windows) {
+      const limit = Number(windowView?.limit ?? Number.NaN);
+      const remaining = Number(windowView?.remaining ?? Number.NaN);
+      const ratio = Number(windowView?.ratio ?? Number.NaN);
+
+      if (Number.isFinite(limit) && limit > 0 && Number.isFinite(remaining)) {
+        totalLimit += limit;
+        totalRemaining += Math.max(Math.min(remaining, limit), 0);
+      }
+
+      if (Number.isFinite(ratio)) {
+        ratioSum += clampRatio(ratio);
+        ratioCount += 1;
+      }
     }
   }
 
-  const rawWindowMinutes = Number(metric?.windowMinutes);
-  if (Number.isFinite(rawWindowMinutes) && rawWindowMinutes > 0) {
-    const minutesLabel = cadenceLabelFromMinutes(rawWindowMinutes);
-    if (minutesLabel.length > 0) {
-      return minutesLabel;
-    }
+  if (totalLimit > 0) {
+    return Math.max(Math.min((totalRemaining / totalLimit) * 100, 100), 0);
   }
 
-  const rawScheduleDurationMs = Number(metric?.scheduleDurationMs);
-  if (Number.isFinite(rawScheduleDurationMs) && rawScheduleDurationMs > 0) {
-    const scheduleLabel = cadenceLabelFromMinutes(Math.round(rawScheduleDurationMs / 60_000));
-    if (scheduleLabel.length > 0) {
-      return scheduleLabel;
-    }
+  if (ratioCount > 0) {
+    return Math.max(Math.min((ratioSum / ratioCount) * 100, 100), 0);
   }
 
-  const labelFromText = cadenceLabelFromText(metric?.label);
-  if (labelFromText.length > 0) {
-    return labelFromText;
-  }
-
-  return normalizeQuotaLabel(metric?.label);
-}
-
-function updateMetricWindowLabels(primaryMetric, secondaryMetric) {
-  const primaryLabel = metricCadenceLabel(primaryMetric);
-  const secondaryLabel = metricCadenceLabel(secondaryMetric);
-  if (metricWindowALabelElement instanceof HTMLElement) {
-    metricWindowALabelElement.textContent = primaryLabel.length > 0 ? `${primaryLabel} Quota` : "";
-  }
-
-  if (metricWindowBLabelElement instanceof HTMLElement) {
-    metricWindowBLabelElement.textContent = secondaryLabel.length > 0 ? `${secondaryLabel} Quota` : "";
-  }
+  return null;
 }
 
 function buildDashboardApiBalanceMetrics(accounts) {
@@ -1862,7 +2287,7 @@ function buildDashboardApiBalanceMetrics(accounts) {
   }
 
   const apiAccounts = accounts.filter((account) => normalizedAccountAuthMethod(account?.authMethod) === "api");
-  if (apiAccounts.length === 0 || apiAccounts.length !== accounts.length) {
+  if (apiAccounts.length === 0) {
     return null;
   }
 
@@ -1882,76 +2307,92 @@ function buildDashboardApiBalanceMetrics(accounts) {
     .filter((entry) => entry !== null);
 
   if (balances.length === 0) {
-    return null;
+    return {
+      value: "$0.00",
+      detail: `0 API connections with live balance`,
+      accountCount: apiAccounts.length,
+      liveBalanceCount: 0,
+    };
   }
 
   const allNumeric = balances.every((entry) => entry.parsed !== null);
   const uniqueCurrencyCodes = [...new Set(balances.map((entry) => entry.currencyCode))];
-  const totalBalance = allNumeric
-    ? uniqueCurrencyCodes.length === 1
-      ? balances.reduce((sum, entry) => sum + (entry.parsed ?? 0), 0)
-      : null
-    : null;
-  const apiAccountSuffix = apiAccounts.length === 1 ? "" : "s";
   const displayCurrencyCode = uniqueCurrencyCodes[0] ?? "USD";
+  const canAggregate = allNumeric && uniqueCurrencyCodes.length === 1;
+  const totalBalance = canAggregate ? balances.reduce((sum, entry) => sum + (entry.parsed ?? 0), 0) : null;
+  const value =
+    totalBalance !== null
+      ? formatBalanceValue(totalBalance, displayCurrencyCode)
+      : formatBalanceValue(balances[0]?.raw ?? "", balances[0]?.currencyCode ?? "USD");
+  const detail =
+    uniqueCurrencyCodes.length > 1
+      ? `${formatNumber(balances.length)} API connections with mixed currencies`
+      : `${formatNumber(balances.length)} API connections with live balance`;
 
   return {
-    primaryLabel: "Total API Balance",
-    primaryValue:
-      totalBalance !== null
-        ? formatBalanceValue(totalBalance, displayCurrencyCode)
-        : formatBalanceValue(balances[0]?.raw ?? "", balances[0]?.currencyCode ?? "USD"),
-    primaryDetail:
-      totalBalance !== null
-        ? `Across ${formatNumber(apiAccounts.length)} API account${apiAccountSuffix}`
-        : uniqueCurrencyCodes.length > 1
-          ? `Across ${formatNumber(balances.length)} API accounts (mixed currencies)`
-          : `Across ${formatNumber(balances.length)} API account${apiAccountSuffix}`,
-    secondaryLabel: "API Accounts",
-    secondaryValue: formatNumber(apiAccounts.length),
-    secondaryDetail: `${formatNumber(balances.length)} with live balance`,
+    value,
+    detail,
+    accountCount: apiAccounts.length,
+    liveBalanceCount: balances.length,
+  };
+}
+
+function resolveCurrentModelMetric() {
+  const preferences = routingPreferencesFromDashboard();
+  const candidateModels = Array.isArray(preferences?.priorityModels)
+    ? preferences.priorityModels
+        .filter((entry) => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+    : [];
+  const currentModel = candidateModels[0] ?? "auto";
+  const detail =
+    currentModel.toLowerCase() === "auto"
+      ? "Routing selects the best model automatically"
+      : "Pinned in routing preferences";
+
+  return {
+    value: currentModel,
+    detail,
   };
 }
 
 function renderDashboardQuotaMetrics(accounts) {
+  const overallQuotaRemainingPercent = computeOverallQuotaRemainingPercent(accounts);
+  if (overallQuotaRemainingPercent === null) {
+    updateMetricText("#metric-total-quota", "--");
+    updateMetricText("#metric-total-quota-detail", "No live quota windows available");
+  } else {
+    updateMetricText("#metric-total-quota", formatPercentValue(overallQuotaRemainingPercent));
+    updateMetricText(
+      "#metric-total-quota-detail",
+      `${formatPercentValue(100 - overallQuotaRemainingPercent)} used / 100% capacity`,
+    );
+  }
+
   const apiBalanceMetrics = buildDashboardApiBalanceMetrics(accounts);
   if (apiBalanceMetrics) {
-    updateMetricText("#metric-window-a-label", apiBalanceMetrics.primaryLabel);
-    updateMetricText("#metric-five-hour", apiBalanceMetrics.primaryValue);
-    updateMetricText("#metric-five-hour-detail", apiBalanceMetrics.primaryDetail);
-    updateMetricText("#metric-window-b-label", apiBalanceMetrics.secondaryLabel);
-    updateMetricText("#metric-weekly", apiBalanceMetrics.secondaryValue);
-    updateMetricText("#metric-weekly-detail", apiBalanceMetrics.secondaryDetail);
+    updateMetricText("#metric-total-api-balance", apiBalanceMetrics.value);
+    updateMetricText("#metric-total-api-balance-detail", apiBalanceMetrics.detail);
+  } else {
+    updateMetricText("#metric-total-api-balance", "$0.00");
+    updateMetricText("#metric-total-api-balance-detail", "No API balance data available");
+  }
+
+  const currentModelMetric = resolveCurrentModelMetric();
+  updateMetricText("#metric-current-model", currentModelMetric.value);
+  updateMetricText("#metric-current-model-detail", currentModelMetric.detail);
+}
+
+function renderBestAccountCard(bestAccount) {
+  if (!bestAccount) {
+    updateMetricText("#metric-current-best-route", "None");
+    updateMetricText("#metric-current-best-route-detail", "Score 0%");
     return;
   }
 
-  const metrics = buildDashboardWindowMetrics(accounts);
-  const primaryMetric = metrics[0] ?? null;
-  const secondaryMetric = metrics[1] ?? null;
-
-  updateMetricWindowLabels(primaryMetric, secondaryMetric);
-
-  if (primaryMetric) {
-    updateMetricText("#metric-five-hour", formatPercentValue(primaryMetric.remainingPercent));
-    updateMetricText(
-      "#metric-five-hour-detail",
-      `${formatPercentValue(primaryMetric.usedPercent)} used / 100% capacity`,
-    );
-  } else {
-    updateMetricText("#metric-five-hour", "");
-    updateMetricText("#metric-five-hour-detail", "");
-  }
-
-  if (secondaryMetric) {
-    updateMetricText("#metric-weekly", formatPercentValue(secondaryMetric.remainingPercent));
-    updateMetricText(
-      "#metric-weekly-detail",
-      `${formatPercentValue(secondaryMetric.usedPercent)} used / 100% capacity`,
-    );
-  } else {
-    updateMetricText("#metric-weekly", "");
-    updateMetricText("#metric-weekly-detail", "");
-  }
+  updateMetricText("#metric-current-best-route", maskDisplayName(bestAccount.displayName));
+  updateMetricText("#metric-current-best-route-detail", `Score ${formatPercent(bestAccount.routingScore)}`);
 }
 
 async function request(path, options = {}) {
@@ -1991,16 +2432,6 @@ function updateSidebarResizerA11y() {
   sidebarResizer.setAttribute("aria-valuemax", String(MAX_SIDEBAR_WIDTH));
   sidebarResizer.setAttribute("aria-valuenow", String(Math.round(sidebarWidth)));
   sidebarResizer.tabIndex = disabled ? -1 : 0;
-}
-
-function renderBestAccountCard(bestAccount) {
-  if (!bestAccount) {
-    updateMetricText("#metric-best-account", "None");
-    updateMetricText("#metric-best-score", "Score 0%");
-    return;
-  }
-  updateMetricText("#metric-best-account", maskDisplayName(bestAccount.displayName));
-  updateMetricText("#metric-best-score", `Score ${formatPercent(bestAccount.routingScore)}`);
 }
 
 function applyQuotaFillWidths() {
@@ -2099,30 +2530,6 @@ function verificationStartPath(accountId) {
   return `/verification/start?accountId=${encodeURIComponent(normalized)}`;
 }
 
-function renderQuotaSyncIssueMarkup(syncIssue, accountId) {
-  if (!syncIssue) {
-    return "";
-  }
-
-  const startPath = verificationStartPath(accountId);
-  if (!startPath) {
-    return "";
-  }
-
-  const stepsMarkup = syncIssue.steps
-    .slice(0, 3)
-    .map((step) => `<li>${escapeHtml(step)}</li>`)
-    .join("");
-
-  return `
-    <div class="account-sync-guidance">
-      <p class="account-sync-guidance-title">${escapeHtml(syncIssue.title)}</p>
-      <ul class="account-sync-guidance-steps">${stepsMarkup}</ul>
-      <a class="btn btn-outline account-verify-action" href="${escapeHtml(startPath)}">${escapeHtml(syncIssue.actionLabel)}</a>
-    </div>
-  `;
-}
-
 function setAccountsListBusy(isBusy) {
   if (!(accountsListElement instanceof HTMLElement)) {
     return;
@@ -2183,12 +2590,12 @@ function renderAccounts(accounts) {
       const connectionLabel = connectionLabelForAccount(account);
       const stateDot = accountStateIndicator(account, quotaWindows);
       const syncError = typeof account.quotaSyncError === "string" ? account.quotaSyncError.trim() : "";
-      const syncIssue = normalizeQuotaSyncIssue(account.quotaSyncIssue);
       const showSyncError = account.quotaSyncStatus !== "live" && syncError.length > 0;
       const estimateNote = usageEstimateNote(account);
-      const guidanceMarkup = showSyncError ? renderQuotaSyncIssueMarkup(syncIssue, account.id) : "";
-      const errorLine = showSyncError
-        ? `<div class="account-error-msg"><p class="account-error-text">${escapeHtml(syncError)}</p>${guidanceMarkup}</div>`
+      const issueSeverityClass = account.quotaSyncStatus === "stale" ? "warn" : "error";
+      const issueIcon = issueSeverityClass === "warn" ? "triangle-alert" : "circle-alert";
+      const issueButton = showSyncError
+        ? `<button class="btn btn-icon account-issue-btn issue-tooltip-trigger ${issueSeverityClass}" data-open-account-settings="${escapeHtml(account.id)}" type="button" aria-label="Open sync issue for ${escapeHtml(accountTitle)}" data-warning-title="Sync issue" data-warning-severity="${escapeHtml(issueSeverityClass === "warn" ? "warning" : "error")}" data-warning-items="${warningDataItems([syncError])}" data-warning-action="open-account-settings" data-warning-action-label="Open settings" data-warning-account-id="${escapeHtml(account.id)}"><i data-lucide="${escapeHtml(issueIcon)}"></i></button>`
         : "";
       const estimateLine =
         estimateNote && estimateNote.trim().length > 0
@@ -2210,9 +2617,10 @@ function renderAccounts(accounts) {
       <article class="account-card">
         <header class="account-top-row">
           <div class="account-actions">
-            <span class="account-state-dot ${stateDot.className}" aria-hidden="true" title="${escapeHtml(stateDot.label)}"></span>
+            <span class="account-state-dot ${stateDot.className}" aria-hidden="true"></span>
             <span class="sr-only">Status: ${escapeHtml(stateDot.label)}</span>
             <h3 class="account-title" title="${escapeHtml(accountTitle)}">${escapeHtml(accountTitle)}</h3>
+            ${issueButton}
           </div>
           <div class="account-actions">
             <button
@@ -2255,7 +2663,6 @@ function renderAccounts(accounts) {
           </button>
         </div>
 
-        ${errorLine}
         ${estimateLine}
       </article>
     `;
@@ -2264,6 +2671,7 @@ function renderAccounts(accounts) {
 
   accountsListElement.innerHTML = cards;
   applyQuotaFillWidths();
+  bindConnectWarningTriggers();
   reRenderIcons();
 }
 
@@ -2494,9 +2902,6 @@ function renderDashboard(data) {
   setConnectorControlsEnabled(dashboardAuthorized);
 
   renderDashboardQuotaMetrics(data.accounts);
-
-  updateMetricText("#metric-account-count", formatNumber(data.accounts.length));
-
   renderBestAccountCard(data.bestAccount);
   renderAccounts(data.accounts);
 
@@ -2627,11 +3032,14 @@ function renderConnectProviderCards() {
         ? `
           <div class="connect-provider-warning-anchor">
             <button
-              class="connect-provider-warning-trigger"
+              class="connect-provider-warning-trigger issue-tooltip-trigger"
               type="button"
               aria-label="Warnings for ${escapeHtml(provider.name)}"
-              data-warning-items="${warnings.map((warning) => encodeURIComponent(warning)).join("|")}"
-              title="Provider warnings"
+              data-warning-items="${warningDataItems(warnings)}"
+              data-warning-title="${escapeHtml(`${provider.name} warnings`)}"
+              data-warning-severity="warning"
+              data-warning-action="open-settings-page"
+              data-warning-action-label="Open settings"
             >
               <i data-lucide="triangle-alert"></i>
             </button>
@@ -2887,7 +3295,7 @@ function openAccountSettingsModal(accountId) {
 
   const account = findDashboardAccount(accountId);
   if (!account) {
-    showToast("Account settings are unavailable.", true);
+    showToast("Connection settings are unavailable.", true);
     return;
   }
 
@@ -3334,7 +3742,7 @@ async function saveRoutingPreferences(preferences) {
 
 async function removeAccount(accountId) {
   await request(`/api/accounts/${accountId}/remove`, { method: "POST" });
-  showToast("Account removed.");
+  showToast("Connection removed.");
   await loadDashboard();
 }
 
@@ -3443,6 +3851,13 @@ document.addEventListener("click", async (event) => {
   const targetElement = target instanceof HTMLElement ? target : target.parentElement;
   
   if (!targetElement) return;
+
+  const topbarIssueButton = targetElement.closest("[data-topbar-issue-type]");
+  if (topbarIssueButton instanceof HTMLElement) {
+    const issueType = topbarIssueButton.dataset.topbarIssueType;
+    await resolveTopbarIssue(issueType);
+    return;
+  }
 
   if (targetElement.closest("#show-overview")) {
     setActiveView("overview");
@@ -3560,7 +3975,7 @@ document.addEventListener("click", async (event) => {
   if (accountSettingsButton instanceof HTMLElement) {
     const accountId = accountSettingsButton.dataset.openAccountSettings;
     if (!accountId) {
-      showToast("Account settings are unavailable.", true);
+      showToast("Connection settings are unavailable.", true);
       return;
     }
 
@@ -3588,7 +4003,7 @@ document.addEventListener("click", async (event) => {
     try {
       await removeAccount(accountId);
     } catch (error) {
-      showToast(error.message || "Failed to remove account.", true);
+      showToast(error.message || "Failed to remove connection.", true);
     }
     return;
   }
@@ -3747,7 +4162,7 @@ if (accountSettingsForm instanceof HTMLFormElement) {
 
     const account = findDashboardAccount(selectedAccountSettingsId);
     if (!account) {
-      showToast("Account settings are unavailable.", true);
+      showToast("Connection settings are unavailable.", true);
       return;
     }
 
@@ -3777,11 +4192,11 @@ if (accountSettingsForm instanceof HTMLFormElement) {
         body: payload,
       });
 
-      showToast("Account settings saved.");
+      showToast("Connection settings saved.");
       closeAccountSettingsModal();
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Failed to save account settings.", true);
+      showToast(error.message || "Failed to save connection settings.", true);
     }
   });
 }
