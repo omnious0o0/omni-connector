@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createApp } from "./app";
-import { resolveConfig } from "./config";
+import { DEFAULT_PORT, resolveConfig } from "./config";
 
 const KNOWN_FLAGS = new Set(["--help", "-h", "--version", "-v", "--init-only"]);
 
@@ -36,7 +36,7 @@ function applyCliDefaults(env: NodeJS.ProcessEnv, packageRoot: string): void {
   }
 
   if (!env.PORT) {
-    env.PORT = "1455";
+    env.PORT = String(DEFAULT_PORT);
   }
 
   if (!env.DATA_FILE) {
@@ -69,7 +69,7 @@ function printHelp(): void {
       "  HOST=127.0.0.1",
       "  ALLOW_REMOTE_DASHBOARD=false",
       "  TRUST_PROXY_HOPS=0",
-      "  PORT=1455",
+      `  PORT=${DEFAULT_PORT}`,
       "  DATA_FILE=~/.omni-connector/data/store.json",
       "  SESSION_SECRET_FILE=~/.omni-connector/data/store.json.session",
       "  SESSION_STORE=memorystore",

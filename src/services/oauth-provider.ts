@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { AppConfig, OAuthProviderProfileConfig, isLoopbackHost } from "../config";
+import { AppConfig, DEFAULT_PORT, OAuthProviderProfileConfig, isLoopbackHost } from "../config";
 import { HttpError } from "../errors";
 import { OAuthLinkedAccountPayload, ProviderId, QuotaWindowMode } from "../types";
 import {
@@ -460,7 +460,7 @@ export class OAuthProviderService {
     } catch {
     }
 
-    return String(this.config.port || 1455);
+    return String(this.config.port || DEFAULT_PORT);
   }
 
   private geminiRedirectUri(): string {
@@ -517,7 +517,7 @@ export class OAuthProviderService {
     }
 
     if (providerId === "codex" && this.config.oauthClientId.trim() === CODEX_DEFAULT_CLIENT_ID) {
-      return "http://localhost:1455/auth/callback";
+      return `http://localhost:${this.providerRedirectPort()}/auth/callback`;
     }
 
     return this.redirectUri();

@@ -178,5 +178,5 @@ omni-connector --init-only
 
 printf "%bInstall complete.%b\n" "${bold}" "${reset}"
 printf "%bRun now:%b omni-connector\n" "${bold}" "${reset}"
-printf "%bDefault URL:%b http://127.0.0.1:1455\n" "${bold}" "${reset}"
+printf "%bDefault URL:%b http://localhost:38471\n" "${bold}" "${reset}"
 printf "%bData location:%b %s\n" "${dim}" "${reset}" "${HOME}/.omni-connector/data/store.json"

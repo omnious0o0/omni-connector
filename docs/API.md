@@ -11,7 +11,7 @@ Just tell your AI agent this:
 
 ```
 I want to use Omni-Connector as my AI provider.
-Base URL: http://localhost:1455/v1
+Base URL: http://localhost:38471/v1
 API Key: <YOUR-API-KEY>
 Use model: auto
 
@@ -34,7 +34,7 @@ That's all. The agent will handle the rest.
 
 > **IMPORTANT:** make sure you've installed omni-connector (see README.md)
 
-**1.** Run `omni-connector` to start the server, then navigate to `http://localhost:1455` in your browser to see the dashboard
+**1.** Run `omni-connector` to start the server, then navigate to `http://localhost:38471` in your browser to see the dashboard
 **2.** Connect AI providers (via OAuth or API key), and set your preferences via the dashboard.
 **3.** Generate an API key that starts with `omni-`...
 **4.** Use it anywhere (see below)
@@ -50,7 +50,7 @@ from openai import OpenAI
 
 client = OpenAI(
     api_key="omni-abc123",
-    base_url="http://localhost:1455/v1"
+    base_url="http://localhost:38471/v1"
 )
 
 response = client.chat.completions.create(
@@ -70,7 +70,7 @@ Most AI-powered tools (like opencode) have a **custom provider** or **"other"** 
 | Field | Value |
 |---|---|
 | **API Key** | `omni-abc123` |
-| **Base URL** | `http://localhost:1455/v1` |
+| **Base URL** | `http://localhost:38471/v1` |
 | **Model** | `auto` *(or any model ID below)* |
 
 If the tool asks for an **API type**, select `OpenAI` or `OpenAI-compatible`.
@@ -125,7 +125,7 @@ On `503`, the response body includes a per-provider failure breakdown.
 ## Endpoint Reference
 
 ```
-POST http://localhost:1455/v1/chat/completions
+POST http://localhost:38471/v1/chat/completions
 Authorization: Bearer omni-abc123
 Content-Type: application/json
 ```

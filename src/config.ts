@@ -8,6 +8,7 @@ import { ProviderId } from "./types";
 export type ProviderUsageParser = "openai_usage" | "anthropic_usage" | "json_totals";
 export type ProviderUsageAuthMode = "bearer" | "x-api-key" | "query-api-key";
 export type SessionStoreMode = "memory" | "memorystore";
+export const DEFAULT_PORT = 38471;
 const MIN_SESSION_SECRET_BYTES = 16;
 
 export interface ProviderUsageConfig {
@@ -110,12 +111,12 @@ export function isLoopbackHost(host: string): boolean {
 
 function parsePort(rawValue: string | undefined): number {
   if (rawValue === undefined) {
-    return 1455;
+    return DEFAULT_PORT;
   }
 
   const parsedValue = Number.parseInt(rawValue, 10);
   if (Number.isNaN(parsedValue) || parsedValue <= 0) {
-    return 1455;
+    return DEFAULT_PORT;
   }
 
   return parsedValue;
