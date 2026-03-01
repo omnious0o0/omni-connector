@@ -145,15 +145,19 @@ type AppContext = vm.Context & {
   warningDataItems: (items: unknown) => string;
   warningItemsFromTrigger: (trigger: unknown) => string[];
   renderApiBalanceBlock: (account: unknown) => string;
+  checkConnectionToast: () => void;
   resolveCurrentModelMetric: () => {
     value: string;
     detail: string;
   };
   reRenderIcons: () => void;
+  resolveStartupLoadErrorMessage: (connectProvidersError: unknown, dashboardError: unknown) => string | null;
   resolveQuotaWindowLabel: (account: unknown, slot: string, windowView: unknown) => string;
+  setDescribedByToken: (element: unknown, token: unknown, enabled: unknown) => void;
   quotaWindowSignature: (windowView: unknown) => string;
   __documentListeners?: Map<string, Array<(event: { target: unknown }) => unknown>>;
   __consensus?: Map<string, number>;
+  __testHistory?: string[];
 };
 
 function loadFrontendAppContext(): AppContext {
@@ -896,6 +900,93 @@ test("frontend warning helper functions encode decode and label actions consiste
   assert.equal(context.warningActionLabel("open-settings-page"), "Open settings");
   assert.equal(context.warningActionLabel("refresh-dashboard"), "Refresh now");
   assert.equal(context.warningActionLabel("unknown"), "");
+});
+
+test("frontend warning trigger descriptor helper writes aria-describedby tokens", () => {
+  const context = loadFrontendAppContext();
+  const attributes = new Map<string, string>();
+  const trigger = Object.assign(new context.HTMLElement(), {
+    getAttribute(name: string) {
+      return attributes.get(name) ?? null;
+    },
+    setAttribute(name: string, value: string) {
+      attributes.set(name, value);
+    },
+    removeAttribute(name: string) {
+      attributes.delete(name);
+    },
+  });
+
+  context.setDescribedByToken(trigger, "warning-a", true);
+  context.setDescribedByToken(trigger, "warning-b", true);
+  context.setDescribedByToken(trigger, "warning-a", true);
+  assert.equal(attributes.get("aria-describedby"), "warning-a warning-b");
+
+  context.setDescribedByToken(trigger, "warning-a", false);
+  assert.equal(attributes.get("aria-describedby"), "warning-b");
+
+  context.setDescribedByToken(trigger, "warning-b", false);
+  assert.equal(attributes.has("aria-describedby"), false);
+});
+
+test("frontend startup error resolver distinguishes provider and dashboard failures", () => {
+  const context = loadFrontendAppContext();
+  const providerError = vm.runInContext('new Error("provider metadata unavailable")', context) as Error;
+  const dashboardError = vm.runInContext('new Error("dashboard endpoint timed out")', context) as Error;
+
+  assert.equal(context.resolveStartupLoadErrorMessage(null, null), null);
+  assert.equal(
+    context.resolveStartupLoadErrorMessage(providerError, null),
+    "Provider metadata failed to load: provider metadata unavailable",
+  );
+  assert.equal(
+    context.resolveStartupLoadErrorMessage(null, dashboardError),
+    "Dashboard failed to load: dashboard endpoint timed out",
+  );
+
+  const combined = context.resolveStartupLoadErrorMessage(
+    providerError,
+    dashboardError,
+  );
+  assert.equal(
+    combined,
+    "Startup incomplete: provider metadata failed (provider metadata unavailable) and dashboard load failed (dashboard endpoint timed out).",
+  );
+});
+
+test("frontend verification toast surfaces sync failure warning and clears query params", () => {
+  const context = loadFrontendAppContext();
+  const contextState = context as unknown as {
+    __testToasts: Array<{ message: string; isError: boolean }>;
+    __testHistory: string[];
+  };
+
+  contextState.__testToasts = [];
+  contextState.__testHistory = [];
+  vm.runInContext(
+    `showToast = (message, isError = false) => { __testToasts.push({ message: String(message), isError: Boolean(isError) }); };`,
+    context,
+  );
+  vm.runInContext(
+    `window.location.search = "?verified=1&sync=failed"; window.location.pathname = "/"; window.history.replaceState = (_state, _title, url) => { __testHistory.push(String(url)); };`,
+    context,
+  );
+
+  context.checkConnectionToast();
+
+  const toasts = JSON.parse(
+    JSON.stringify(contextState.__testToasts),
+  ) as Array<{ message: string; isError: boolean }>;
+  assert.deepEqual(toasts, [
+    {
+      message:
+        "Verification step completed, but quota sync is still unavailable. Open connection settings and retry verification sync.",
+      isError: true,
+    },
+  ]);
+
+  const historyCalls = JSON.parse(JSON.stringify(contextState.__testHistory)) as string[];
+  assert.deepEqual(historyCalls, ["/"]);
 });
 
 test("frontend topbar tooltip payload keeps severity messages and routes actions", () => {

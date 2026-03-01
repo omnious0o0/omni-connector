@@ -190,7 +190,7 @@ function setDescribedByToken(element, token, enabled) {
     return;
   }
 
-  const attributeName = "aria-controls";
+  const attributeName = "aria-describedby";
   const current = (element.getAttribute(attributeName) ?? "").trim();
   const tokens = current.length > 0 ? current.split(/\s+/) : [];
   const next = enabled
@@ -2468,6 +2468,37 @@ async function request(path, options = {}) {
   return payload;
 }
 
+function errorMessageFromUnknown(error, fallback) {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+function resolveStartupLoadErrorMessage(connectProvidersError, dashboardError) {
+  const connectMessage = connectProvidersError
+    ? errorMessageFromUnknown(connectProvidersError, "Could not load provider options. Please refresh and try again.")
+    : null;
+  const dashboardMessage = dashboardError
+    ? errorMessageFromUnknown(dashboardError, "Could not load dashboard data. Please refresh and try again.")
+    : null;
+
+  if (connectMessage && dashboardMessage) {
+    return `Startup incomplete: provider metadata failed (${connectMessage}) and dashboard load failed (${dashboardMessage}).`;
+  }
+
+  if (connectMessage) {
+    return `Provider metadata failed to load: ${connectMessage}`;
+  }
+
+  if (dashboardMessage) {
+    return `Dashboard failed to load: ${dashboardMessage}`;
+  }
+
+  return null;
+}
+
 function updateSidebarResizerA11y() {
   if (!(sidebarResizer instanceof HTMLElement)) {
     return;
@@ -3930,8 +3961,15 @@ function checkConnectionToast() {
   }
 
   if (params.get("verified") === "1") {
-    showToast("Verification step completed. Syncing quota now.");
+    const syncFailed = params.get("sync") === "failed";
+    showToast(
+      syncFailed
+        ? "Verification step completed, but quota sync is still unavailable. Open connection settings and retry verification sync."
+        : "Verification step completed. Syncing quota now.",
+      syncFailed,
+    );
     params.delete("verified");
+    params.delete("sync");
     shouldRewriteUrl = true;
   }
 
@@ -4687,9 +4725,14 @@ window.addEventListener("load", async () => {
   setActiveView(currentView);
   setConnectorControlsEnabled(false);
   checkConnectionToast();
-  try {
-    await Promise.all([loadConnectProviders(), loadDashboard()]);
-  } catch (error) {
-    showToast(error.message || "Could not load dashboard data. Please refresh and try again.", true);
+  const [connectProvidersResult, dashboardResult] = await Promise.allSettled([
+    loadConnectProviders(),
+    loadDashboard(),
+  ]);
+  const connectProvidersError = connectProvidersResult.status === "rejected" ? connectProvidersResult.reason : null;
+  const dashboardError = dashboardResult.status === "rejected" ? dashboardResult.reason : null;
+  const startupMessage = resolveStartupLoadErrorMessage(connectProvidersError, dashboardError);
+  if (startupMessage) {
+    showToast(startupMessage, true);
   }
 });
