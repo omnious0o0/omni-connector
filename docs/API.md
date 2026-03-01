@@ -98,7 +98,7 @@ By default, `model: auto` lets Omni pick the best available option. To be more s
 |---|---|
 | `auto` | Picks best available across all connected providers |
 | `provider-id` | Best available connection for that provider |
-| `model-id` | Exact model, best matching account |
+| `model-id` | Exact model, best matching connection |
 
 ---
 

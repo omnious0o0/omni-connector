@@ -62,7 +62,7 @@ Defaults are ready out of the box. Use `.env` only if you want to override behav
 
 Keep `OAUTH_REDIRECT_URI` consistent with the OAuth profile you use. For Codex, use `http://localhost:38471/auth/callback` unless you have an explicitly registered alternative callback.
 
-By default `OAUTH_REQUIRE_QUOTA=true`, so account linking fails if real quota cannot be fetched.
+By default `OAUTH_REQUIRE_QUOTA=true`, so connection linking fails if real quota cannot be fetched.
 
 ## API
 

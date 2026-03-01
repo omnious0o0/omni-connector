@@ -735,7 +735,7 @@ function startAutoRefreshTimer() {
     try {
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Auto-refresh stopped because the last update failed. Click Refresh to try again.", true);
+      showToast(error.message || "Auto-refresh stopped because the latest update could not complete. Click Refresh to try again.", true);
       stopAutoRefreshTimer();
       autoRefreshEnabled = false;
       persistUiSettings();
@@ -890,7 +890,7 @@ function collectTopbarIssues() {
   if (statusError) {
     issues.push({
       type: "error",
-      message: "Dashboard request failed. Click to retry loading.",
+      message: "Dashboard could not be loaded. Click to retry.",
       action: "refresh-dashboard",
     });
   }
@@ -2414,7 +2414,9 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const serverMessage =
-      typeof payload === "object" && payload?.message ? payload.message : `Request failed (${response.status}).`;
+      typeof payload === "object" && payload?.message
+        ? payload.message
+        : `Request could not be completed (${response.status}). Please try again.`;
     const message =
       response.status >= 500
         ? "The server is temporarily unavailable. Please try again in a moment."
@@ -4061,7 +4063,7 @@ document.addEventListener("click", async (event) => {
     try {
       await removeAccount(accountId);
     } catch (error) {
-      showToast(error.message || "Failed to remove connection.", true);
+      showToast(error.message || "Could not remove connection. Please try again.", true);
     }
     return;
   }
@@ -4070,7 +4072,7 @@ document.addEventListener("click", async (event) => {
     try {
       await rotateConnectorKey();
     } catch (error) {
-      showToast(error.message || "Failed to rotate key.", true);
+      showToast(error.message || "Could not rotate key. Please try again.", true);
     }
     return;
   }
@@ -4079,7 +4081,7 @@ document.addEventListener("click", async (event) => {
     try {
       await copyConnectorKey();
     } catch (error) {
-      showToast(error.message || "Failed to copy key.", true);
+      showToast(error.message || "Could not copy key. Please try again.", true);
     }
     return;
   }
@@ -4090,7 +4092,7 @@ document.addEventListener("click", async (event) => {
     try {
       await copySidebarModelId(fullModelId);
     } catch (error) {
-      showToast(error.message || "Failed to copy model ID.", true);
+      showToast(error.message || "Could not copy model ID. Please try again.", true);
     }
     return;
   }
@@ -4118,7 +4120,7 @@ if (routingPriorityForm instanceof HTMLFormElement) {
       showToast("Routing priority saved.");
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Failed to save routing priority.", true);
+      showToast(error.message || "Could not save routing priority. Please try again.", true);
     }
   });
 }
@@ -4142,7 +4144,7 @@ if (routingPriorityResetButton instanceof HTMLButtonElement) {
       showToast("Routing priority reset to auto.");
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Failed to reset routing priority.", true);
+      showToast(error.message || "Could not reset routing priority. Please try again.", true);
     }
   });
 }
@@ -4199,7 +4201,7 @@ if (apiLinkForm instanceof HTMLFormElement) {
       closeConnectModal();
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Failed to link API key.", true);
+      showToast(error.message || "Could not link API key. Please try again.", true);
     }
   });
 }
@@ -4254,7 +4256,7 @@ if (accountSettingsForm instanceof HTMLFormElement) {
       closeAccountSettingsModal();
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Failed to save connection settings.", true);
+      showToast(error.message || "Could not save connection settings. Please try again.", true);
     }
   });
 }
