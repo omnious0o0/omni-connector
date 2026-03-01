@@ -1325,11 +1325,7 @@ test("uses canonical localhost codex redirect_uri", async () => {
       .get("/auth/omni/start")
       .set("Host", "127.0.0.1:1455")
       .expect(302);
-    const ipv4AuthorizationUrl = new URL(asIpv4Host.header.location as string);
-    assert.equal(
-      ipv4AuthorizationUrl.searchParams.get("redirect_uri"),
-      "http://localhost:1455/auth/callback",
-    );
+    assert.equal(asIpv4Host.header.location, "http://localhost:1455/auth/omni/start");
 
     const asLocalhost = await supertest(app)
       .get("/auth/omni/start")

@@ -8,7 +8,7 @@ import { ProviderId } from "./types";
 export type ProviderUsageParser = "openai_usage" | "anthropic_usage" | "json_totals";
 export type ProviderUsageAuthMode = "bearer" | "x-api-key" | "query-api-key";
 export type SessionStoreMode = "memory" | "memorystore";
-export const DEFAULT_PORT = 38471;
+export const DEFAULT_PORT = 1455;
 const MIN_SESSION_SECRET_BYTES = 16;
 
 export interface ProviderUsageConfig {
@@ -950,7 +950,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     oauthClientId: nonEmptyEnvValue(env.OAUTH_CLIENT_ID) ?? "app_EMoamEEZ73f0CkXaXp7hrann",
     oauthClientSecret: nonEmptyEnvValue(env.OAUTH_CLIENT_SECRET) ?? "",
     oauthScopes: parseScopes(nonEmptyEnvValue(env.OAUTH_SCOPES) ?? undefined),
-    oauthOriginator: nonEmptyEnvValue(env.OAUTH_ORIGINATOR) ?? "codex_cli_rs",
+    oauthOriginator: nonEmptyEnvValue(env.OAUTH_ORIGINATOR) ?? "pi",
     codexAppServerEnabled: parseBoolean(env.CODEX_APP_SERVER_ENABLED, true),
     codexAppServerCommand: nonEmptyEnvValue(env.CODEX_APP_SERVER_COMMAND) ?? "codex",
     codexAppServerArgs: parseCommandArgs(env.CODEX_APP_SERVER_ARGS, ["app-server"]),

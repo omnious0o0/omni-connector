@@ -17,7 +17,7 @@ const codexProvider: ProviderModule = {
         tokenUrl: "https://auth.openai.com/oauth/token",
         userInfoUrl: null,
         scopes: "openid profile email offline_access",
-        originator: "codex_cli_rs",
+        originator: "pi",
         clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
         clientSecret: "",
         extraParams: {

@@ -1,4 +1,5 @@
 import { Request, Response, Router } from "express";
+import { isLoopbackHost } from "../config";
 import { HttpError } from "../errors";
 import { isProviderId, providerOAuthProfileDefinitions } from "../providers";
 import { ConnectorService } from "../services/connector";
@@ -285,6 +286,48 @@ function clearLegacyOAuthSessionState(req: Request): void {
   req.session.oauthProfileId = undefined;
 }
 
+function normalizedUrlPort(url: URL): string {
+  if (url.port) {
+    return url.port;
+  }
+
+  return url.protocol === "https:" ? "443" : "80";
+}
+
+function redirectToCanonicalLoopbackHostIfNeeded(req: Request, res: Response, redirectUri: string): boolean {
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL(redirectUri);
+  } catch {
+    return false;
+  }
+
+  const requestHost = req.get("host");
+  if (!requestHost) {
+    return false;
+  }
+
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(`${req.protocol}://${requestHost}${req.originalUrl || req.url || "/"}`);
+  } catch {
+    return false;
+  }
+
+  const sameProtocol = requestUrl.protocol === redirectUrl.protocol;
+  const samePort = normalizedUrlPort(requestUrl) === normalizedUrlPort(redirectUrl);
+  const bothLoopback = isLoopbackHost(requestUrl.hostname) && isLoopbackHost(redirectUrl.hostname);
+  const sameHost = requestUrl.hostname.toLowerCase() === redirectUrl.hostname.toLowerCase();
+
+  if (!bothLoopback || !sameProtocol || !samePort || sameHost) {
+    return false;
+  }
+
+  const targetUrl = new URL(req.originalUrl || req.url || "/", `${redirectUrl.protocol}//${redirectUrl.host}`);
+  res.redirect(targetUrl.toString());
+  return true;
+}
+
 async function regenerateSession(req: Request): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     req.session.regenerate((error) => {
@@ -358,10 +401,14 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
       throw new HttpError(503, "oauth_not_configured", message);
     }
 
+    const redirectUri = dependencies.oauthProviderService.redirectUriFor(providerId, profileId);
+    if (redirectToCanonicalLoopbackHostIfNeeded(req, res, redirectUri)) {
+      return;
+    }
+
     const state = dependencies.oauthProviderService.createState();
     const codeVerifier = dependencies.oauthProviderService.createPkceVerifier();
     const codeChallenge = dependencies.oauthProviderService.createPkceChallenge(codeVerifier);
-    const redirectUri = dependencies.oauthProviderService.redirectUriFor(providerId, profileId);
 
     const pendingFlows = prunePendingFlows(req.session.oauthPendingFlows);
     const flow: OAuthPendingFlowState = {
