@@ -300,7 +300,7 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
 
     if (isHttpError(error)) {
       if (shouldReturnJson) {
-        const message = error.status >= 500 ? "Unexpected server error." : error.message;
+        const message = error.status >= 500 ? "Server error. Please try again shortly." : error.message;
         res.status(error.status).json({
           error: error.code,
           message,
@@ -311,7 +311,7 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
       const allowsDetailedServerMessage = error.code === "oauth_not_configured";
       const message =
         error.status >= 500 && !allowsDetailedServerMessage
-          ? "Authentication failed. Please retry."
+          ? "Server error. Please try again shortly."
           : error.message;
       res.status(error.status).type("text/plain").send(message);
       return;
@@ -320,12 +320,12 @@ export function createApp(overrides: Partial<AppConfig> = {}): express.Express {
     if (shouldReturnJson) {
       res.status(500).json({
         error: "internal_error",
-        message: "Unexpected server error.",
+        message: "Server error. Please try again shortly.",
       });
       return;
     }
 
-    res.status(500).type("text/plain").send("Unexpected server error.");
+    res.status(500).type("text/plain").send("Server error. Please try again shortly.");
   });
 
   return app;

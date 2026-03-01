@@ -1029,7 +1029,7 @@ test("returns 503 with provider failure breakdown when all upstream calls fail",
 
     assert.equal(response.body.error?.code, "no_providers_available");
     assert.equal(response.body.error?.type, "server_error");
-    assert.equal(response.body.error?.message, "No connected provider could serve this request.");
+    assert.equal(response.body.error?.message, "No connected provider is currently available for this request.");
     assert.equal(Array.isArray(response.body.error?.provider_failures), true);
     assert.equal(response.body.error.provider_failures.length, 1);
     assert.deepEqual(Object.keys(response.body.error.provider_failures[0] ?? {}).sort(), [

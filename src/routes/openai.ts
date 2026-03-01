@@ -417,7 +417,10 @@ function sendOpenAiError(
   message: string,
   extra: Record<string, unknown> = {},
 ): void {
-  const fallbackMessage = status >= 500 ? "Unexpected server error." : "Request failed.";
+  const fallbackMessage =
+    status >= 500
+      ? "Internal server error. Please retry in a few moments."
+      : "The request could not be completed. Verify your input and try again.";
   const safeMessage = sanitizeExternalErrorMessage(message, fallbackMessage);
 
   res.status(status).json({
@@ -801,7 +804,7 @@ async function executeOpenAiCompatibleChatCompletion(
   if (result.status < 200 || result.status >= 300 || !asRecord(result.payload)) {
     const fallbackMessage =
       result.status >= 200 && result.status < 300
-        ? "Upstream returned an invalid response payload."
+        ? "Provider response was invalid. Please retry or use a different model."
         : result.message;
     throw new HttpError(result.status >= 400 ? result.status : 502, "upstream_request_failed", fallbackMessage);
   }
@@ -860,7 +863,7 @@ async function executeChatCompletionForCandidate(
       const codexCompletion = await postCodexResponsesSse(codexUrl, codexHeaders, codexBody, codexModel);
       return mapCodexCompletionToOpenAi(codexCompletion);
     } catch (codexError) {
-      const primaryFailureMessage = errorMessage(codexError, "Codex backend request failed.");
+      const primaryFailureMessage = errorMessage(codexError, "Primary provider request failed.");
       try {
         return await executeOpenAiCompatibleChatCompletion(
           candidate,
@@ -869,7 +872,7 @@ async function executeChatCompletionForCandidate(
           providerInferenceBaseUrls,
         );
       } catch (fallbackError) {
-        const fallbackFailureMessage = errorMessage(fallbackError, "OpenAI-compatible fallback failed.");
+        const fallbackFailureMessage = errorMessage(fallbackError, "Fallback provider request failed.");
         const fallbackStatus = fallbackError instanceof HttpError ? fallbackError.status : 502;
         throw new HttpError(
           fallbackStatus,
@@ -918,7 +921,7 @@ export function createOpenAiRouter(dependencies: OpenAiRouterDependencies): Rout
           return;
         } catch (error) {
           const status = error instanceof HttpError ? error.status : null;
-          const message = errorMessage(error, "Upstream request failed unexpectedly.");
+          const message = errorMessage(error, "Provider request failed.");
 
           failures.push({
             provider: candidate.provider,
@@ -932,7 +935,7 @@ export function createOpenAiRouter(dependencies: OpenAiRouterDependencies): Rout
         res,
         503,
         "no_providers_available",
-        "No connected provider could serve this request.",
+        "No connected provider is currently available for this request.",
         {
           provider_failures: failures,
         },
@@ -943,7 +946,7 @@ export function createOpenAiRouter(dependencies: OpenAiRouterDependencies): Rout
         return;
       }
 
-      sendOpenAiError(res, 500, "internal_error", "Unexpected server error.");
+      sendOpenAiError(res, 500, "internal_error", "Internal server error. Please retry in a few moments.");
     }
   });
 

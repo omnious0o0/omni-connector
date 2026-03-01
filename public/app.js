@@ -469,7 +469,7 @@ async function resolveIssueAction(action, accountId = null) {
       await loadDashboard();
       showToast("Dashboard refreshed.");
     } catch (error) {
-      showToast(error.message || "Refresh failed.", true);
+      showToast(error.message || "Could not refresh data. Check your connection and try again.", true);
     }
   }
 }
@@ -735,7 +735,7 @@ function startAutoRefreshTimer() {
     try {
       await loadDashboard();
     } catch (error) {
-      showToast(error.message || "Auto refresh failed.", true);
+      showToast(error.message || "Auto-refresh stopped because the last update failed. Click Refresh to try again.", true);
       stopAutoRefreshTimer();
       autoRefreshEnabled = false;
       persistUiSettings();
@@ -1095,7 +1095,7 @@ async function resolveTopbarIssue(issueType) {
       await loadDashboard();
       showToast("Dashboard refreshed.");
     } catch (error) {
-      showToast(error.message || "Refresh failed.", true);
+      showToast(error.message || "Could not refresh data. Check your connection and try again.", true);
     }
     return;
   }
@@ -2415,7 +2415,10 @@ async function request(path, options = {}) {
   if (!response.ok) {
     const serverMessage =
       typeof payload === "object" && payload?.message ? payload.message : `Request failed (${response.status}).`;
-    const message = response.status >= 500 ? "Server request failed. Please retry." : serverMessage;
+    const message =
+      response.status >= 500
+        ? "The server is temporarily unavailable. Please try again in a moment."
+        : serverMessage;
     throw new Error(message);
   }
 
@@ -2547,14 +2550,14 @@ function renderAccountsLoadError(message) {
   const details =
     typeof message === "string" && message.trim().length > 0
       ? message.trim()
-      : "Unable to load connections.";
+      : "Click Refresh to try again.";
 
   accountsListElement.classList.add("is-empty");
   accountsListElement.classList.remove("single-account");
   accountsListElement.innerHTML = `
     <div class="empty-state">
       <i data-lucide="alert-triangle"></i>
-      <p>Unable to load connections.</p>
+      <p>Could not load your connections.</p>
       <p>${escapeHtml(details)}</p>
     </div>
   `;
@@ -2925,7 +2928,8 @@ async function loadConnectedProviderModels() {
     connectedProviderModelsPayload = {
       providers: [],
     };
-    connectedProviderModelsError = error instanceof Error ? error.message : "request failed";
+    connectedProviderModelsError =
+      error instanceof Error ? error.message : "Could not fetch provider models. Please retry.";
   }
 
   renderSidebarModels(connectedProviderModelsPayload);
@@ -2970,7 +2974,7 @@ async function loadDashboard() {
     renderDashboard(payload);
   } catch (error) {
     if (!dashboardLoaded) {
-      renderAccountsLoadError(error instanceof Error ? error.message : "Request failed.");
+      renderAccountsLoadError(error instanceof Error ? error.message : "Could not load dashboard data.");
     } else {
       setAccountsListBusy(false);
     }
@@ -4096,7 +4100,7 @@ document.addEventListener("click", async (event) => {
       await loadDashboard();
       showToast("Dashboard refreshed.");
     } catch (error) {
-      showToast(error.message || "Refresh failed.", true);
+      showToast(error.message || "Could not refresh data. Check your connection and try again.", true);
     }
     return;
   }
@@ -4525,6 +4529,6 @@ window.addEventListener("load", async () => {
   try {
     await Promise.all([loadConnectProviders(), loadDashboard()]);
   } catch (error) {
-    showToast(error.message || "Failed to load.", true);
+    showToast(error.message || "Could not load dashboard data. Please refresh and try again.", true);
   }
 });

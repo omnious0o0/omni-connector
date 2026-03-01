@@ -28,6 +28,17 @@ omni-connector
 - `npm run build` - Clean and build TypeScript into `dist/`
 - `npm run start` - Run production build
 
+## Updating
+
+To upgrade, run the same installer command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh | bash
+```
+
+Then restart with `omni-connector`.
+No client config changes are needed unless you use custom overrides.
+
 ## Optional Environment Overrides
 
 Defaults are ready out of the box. Use `.env` only if you want to override behavior.

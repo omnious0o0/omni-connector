@@ -15,7 +15,7 @@ Base URL: http://localhost:38471/v1
 API Key: <YOUR-API-KEY>
 Use model: auto
 
-<TYPE HERE WHERE YOU WANT TO USE IT (e.g. opencode, cursor, etc.)>
+[YOUR_TOOL_NAME] (for example: opencode, cursor)
 
 Set this up exactly as you would an OpenAI-compatible provider.
 Replace any existing base URL and API key with the above.
@@ -38,6 +38,19 @@ That's all. The agent will handle the rest.
 **2.** Connect AI providers (via OAuth or API key), and set your preferences via the dashboard.
 **3.** Generate an API key that starts with `omni-`...
 **4.** Use it anywhere (see below)
+
+---
+
+## Updating
+
+- Re-run the installer to get the latest version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh | bash
+```
+
+- Restart `omni-connector` after upgrading.
+- Your client settings usually stay the same (`http://localhost:38471/v1`, `omni-...`, `model: auto`).
 
 ---
 
@@ -91,7 +104,8 @@ By default, `model: auto` lets Omni pick the best available option. To be more s
 
 ## Custom / Self-Hosted Providers
 
-[coming soon]
+Self-hosted providers are not available yet.
+For now, connect supported providers from the dashboard and route with `model: auto` or explicit provider/model IDs.
 
 ---
 
