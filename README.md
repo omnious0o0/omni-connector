@@ -6,9 +6,16 @@ omni-connector is a simple interface to connect & track all your AI service prov
 
 Use the global installer:
 
+Unix (Linux, macOS, WSL):
+
 ```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/omnious0o0/omni-connector/main/install.ps1 | iex
 ```
 
 Then start it with:
@@ -44,8 +51,11 @@ pn --upd
 If you prefer rerunning the installer directly:
 
 ```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/omnious0o0/omni-connector/main/install.ps1 | iex
 ```
 
 Then restart with `omni-connector`.

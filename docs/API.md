@@ -54,8 +54,11 @@ pn --upd
 - Or re-run the installer to get the latest version:
 
 ```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/omnious0o0/omni-connector/main/install.ps1 | iex
 ```
 
 - Restart `omni-connector` after upgrading.
