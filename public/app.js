@@ -1921,7 +1921,7 @@ function normalizedAccountQuotaWindows(account) {
     deduped.push(windowView);
   }
 
-  return deduped.sort((left, right) => {
+  const orderedByDuration = deduped.sort((left, right) => {
     const leftDuration =
       Number.isFinite(left.windowMinutes) && left.windowMinutes !== null
         ? left.windowMinutes
@@ -1931,6 +1931,48 @@ function normalizedAccountQuotaWindows(account) {
         ? right.windowMinutes
         : (right.scheduleDurationMs ?? Number.MAX_SAFE_INTEGER) / 60_000;
     return leftDuration - rightDuration;
+  });
+
+  if (normalizedAccountAuthMethod(account?.authMethod) === "api") {
+    return orderedByDuration;
+  }
+
+  const weeklyWindow = orderedByDuration.find((windowView) => windowView.slot === "weekly") ?? null;
+  const weeklyLimit = Number(weeklyWindow?.limit);
+  if (!weeklyWindow || !Number.isFinite(weeklyLimit) || weeklyLimit <= 0) {
+    return orderedByDuration;
+  }
+
+  const weeklyRatio = clampRatio(Number(weeklyWindow.ratio));
+  return orderedByDuration.map((windowView) => {
+    if (windowView.slot === "weekly") {
+      return windowView;
+    }
+
+    const baseRatio = clampRatio(Number(windowView.ratio));
+    const cappedRatio = Math.min(baseRatio, weeklyRatio);
+    if (Math.abs(cappedRatio - baseRatio) < 0.0001) {
+      return windowView;
+    }
+
+    const limit = Number(windowView.limit);
+    const cappedRemaining =
+      Number.isFinite(limit) && limit > 0
+        ? Math.max(Math.min(limit * cappedRatio, limit), 0)
+        : Number(windowView.remaining);
+    const cappedUsed =
+      Number.isFinite(limit) && limit > 0 ? Math.max(limit - cappedRemaining, 0) : Number(windowView.used);
+    const remainingPercent = cappedRatio * 100;
+    const usedPercent = 100 - remainingPercent;
+
+    return {
+      ...windowView,
+      ratio: cappedRatio,
+      remaining: cappedRemaining,
+      used: cappedUsed,
+      value: `${formatPercentValue(remainingPercent)}`,
+      detail: `${formatPercentValue(usedPercent)} used / 100% capacity`,
+    };
   });
 }
 
@@ -2117,36 +2159,49 @@ function computeOverallQuotaRemainingPercent(accounts) {
     return null;
   }
 
-  let totalLimit = 0;
-  let totalRemaining = 0;
-  let ratioSum = 0;
-  let ratioCount = 0;
+  let weightedPercentSum = 0;
+  let weightedLimitTotal = 0;
+  let fallbackRatioSum = 0;
+  let fallbackCount = 0;
 
   for (const account of accounts) {
-    const windows = normalizedAccountQuotaWindows(account);
-    for (const windowView of windows) {
-      const limit = Number(windowView?.limit ?? Number.NaN);
-      const remaining = Number(windowView?.remaining ?? Number.NaN);
-      const ratio = Number(windowView?.ratio ?? Number.NaN);
-
-      if (Number.isFinite(limit) && limit > 0 && Number.isFinite(remaining)) {
-        totalLimit += limit;
-        totalRemaining += Math.max(Math.min(remaining, limit), 0);
-      }
-
-      if (Number.isFinite(ratio)) {
-        ratioSum += clampRatio(ratio);
-        ratioCount += 1;
-      }
+    if (normalizedAccountAuthMethod(account?.authMethod) === "api") {
+      continue;
     }
+
+    const windows = normalizedAccountQuotaWindows(account);
+    if (!Array.isArray(windows) || windows.length === 0) {
+      continue;
+    }
+
+    const weeklyWindow = windows.find((windowView) => windowView.slot === "weekly") ?? windows[windows.length - 1] ?? null;
+    if (!weeklyWindow) {
+      continue;
+    }
+
+    const baseWeeklyRatio = clampRatio(Number(weeklyWindow.ratio));
+    const effectiveRatio = windows.reduce(
+      (lowestRatio, windowView) => Math.min(lowestRatio, clampRatio(Number(windowView?.ratio))),
+      baseWeeklyRatio,
+    );
+
+    const weeklyLimit = Number(weeklyWindow.limit);
+    if (Number.isFinite(weeklyLimit) && weeklyLimit > 0) {
+      weightedPercentSum += effectiveRatio * 100 * weeklyLimit;
+      weightedLimitTotal += weeklyLimit;
+      continue;
+    }
+
+    fallbackRatioSum += effectiveRatio;
+    fallbackCount += 1;
   }
 
-  if (totalLimit > 0) {
-    return Math.max(Math.min((totalRemaining / totalLimit) * 100, 100), 0);
+  if (weightedLimitTotal > 0) {
+    return Math.max(Math.min(weightedPercentSum / weightedLimitTotal, 100), 0);
   }
 
-  if (ratioCount > 0) {
-    return Math.max(Math.min((ratioSum / ratioCount) * 100, 100), 0);
+  if (fallbackCount > 0) {
+    return Math.max(Math.min((fallbackRatioSum / fallbackCount) * 100, 100), 0);
   }
 
   return null;

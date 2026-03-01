@@ -410,6 +410,33 @@ test("frontend normalized windows render one or two fields based on unique windo
   assert.equal(distinct.length, 2);
 });
 
+test("frontend weekly quota cap limits shorter quota windows", () => {
+  const context = loadFrontendAppContext();
+  const account = createAccountState();
+
+  account.quota.fiveHour.used = 0;
+  account.quota.weekly.used = 100;
+
+  const windows = JSON.parse(
+    JSON.stringify(context.normalizedAccountQuotaWindows(toDashboardAccount(account))),
+  ) as Array<{
+    slot: string;
+    ratio: number;
+    value: string;
+    remaining: number;
+  }>;
+
+  const fiveHour = windows.find((windowView) => windowView.slot === "fiveHour");
+  const weekly = windows.find((windowView) => windowView.slot === "weekly");
+
+  assert.ok(fiveHour);
+  assert.ok(weekly);
+  assert.equal(weekly?.ratio, 0);
+  assert.equal(fiveHour?.ratio, 0);
+  assert.equal(fiveHour?.value.includes("0%"), true);
+  assert.equal(fiveHour?.remaining, 0);
+});
+
 test("frontend sidebar model helpers normalize IDs and queries", () => {
   const context = loadFrontendAppContext();
 
@@ -796,7 +823,7 @@ test("frontend overall quota metric computes weighted remaining percentage", () 
   ]);
 
   assert.ok(remaining !== null);
-  assert.equal(Math.round(Number(remaining)), 63);
+  assert.equal(Math.round(Number(remaining)), 35);
 });
 
 test("frontend current model metric follows routing preferences", () => {
