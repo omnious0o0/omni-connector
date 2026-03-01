@@ -35,7 +35,7 @@
         </div>
         <div>
           <h1 class="brand-title">omni-connector</h1>
-          <p class="brand-subtitle">multi-account router</p>
+          <p class="brand-subtitle">multi-connection router</p>
         </div>
         <button id="toggle-sidebar" class="btn btn-icon sidebar-toggle-btn" type="button" aria-label="Collapse panel"
           title="Collapse panel">
@@ -61,14 +61,20 @@
           <header class="sidebar-models-header">
             <h2>Models</h2>
             <label for="sidebar-models-search" class="sr-only">Search connected model IDs</label>
-            <input
-              id="sidebar-models-search"
-              class="sidebar-models-search"
-              type="search"
-              placeholder="Search models"
-              autocomplete="off"
-              spellcheck="false"
-            />
+            <div class="sidebar-models-search-shell">
+              <input
+                id="sidebar-models-search"
+                class="sidebar-models-search"
+                type="search"
+                placeholder="Search models"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button id="sidebar-models-search-clear" class="btn btn-icon sidebar-models-search-clear" type="button"
+                aria-label="Clear model search" title="Clear model search" hidden>
+                <i data-lucide="x"></i>
+              </button>
+            </div>
           </header>
           <div id="sidebar-models-content" class="sidebar-models-content">
             <p class="sidebar-models-empty">Loading connected models...</p>
@@ -92,7 +98,7 @@
     <main class="main-content">
       <header class="page-header">
         <div class="topbar-container">
-          <div class="topbar-left" aria-hidden="true"></div>
+          <div id="topbar-issues" class="topbar-left" aria-live="polite"></div>
           <div id="topbar-time" class="topbar-time">--:--:--</div>
           <div id="topbar-status" class="topbar-status" data-state="preparing" role="status" aria-live="polite">
             <span class="topbar-status-dot"></span>
@@ -125,38 +131,38 @@
           <section class="metrics-grid">
             <article class="metric-card">
               <div class="metric-header">
-                <i data-lucide="users"></i>
-                <h3>Connections</h3>
+                <i data-lucide="gauge"></i>
+                <h3>Total Quota</h3>
               </div>
-              <p id="metric-account-count" class="metric-value">0</p>
-              <p class="metric-caption">Available for routing</p>
+              <p id="metric-total-quota" class="metric-value">--</p>
+              <p id="metric-total-quota-detail" class="metric-caption">No live quota windows available</p>
             </article>
 
             <article class="metric-card">
               <div class="metric-header">
-                <i data-lucide="clock"></i>
-                <h3 id="metric-window-a-label"></h3>
+                <i data-lucide="zap"></i>
+                <h3>current best route</h3>
               </div>
-              <p id="metric-five-hour" class="metric-value">0</p>
-              <p id="metric-five-hour-detail" class="metric-caption">0 / 0 limits</p>
+              <p id="metric-current-best-route" class="metric-value text-sm">None</p>
+              <p id="metric-current-best-route-detail" class="metric-caption">Score 0%</p>
             </article>
 
             <article class="metric-card">
               <div class="metric-header">
-                <i data-lucide="calendar"></i>
-                <h3 id="metric-window-b-label"></h3>
+                <i data-lucide="wallet"></i>
+                <h3>Total API Balance</h3>
               </div>
-              <p id="metric-weekly" class="metric-value">0</p>
-              <p id="metric-weekly-detail" class="metric-caption">0 / 0 limits</p>
+              <p id="metric-total-api-balance" class="metric-value">$0.00</p>
+              <p id="metric-total-api-balance-detail" class="metric-caption">No API balance data available</p>
             </article>
 
             <article class="metric-card highlight-card">
               <div class="metric-header">
-                <i data-lucide="zap"></i>
-                <h3>Current Best Route</h3>
+                <i data-lucide="bot"></i>
+                <h3>Current Model</h3>
               </div>
-              <p id="metric-best-account" class="metric-value text-sm">None</p>
-              <p id="metric-best-score" class="metric-caption">Score 0%</p>
+              <p id="metric-current-model" class="metric-value text-sm">auto</p>
+              <p id="metric-current-model-detail" class="metric-caption">Routing selects the best model automatically</p>
             </article>
           </section>
 
@@ -234,7 +240,7 @@
 
             <label class="settings-switch" for="settings-show-sensitive">
               <div class="settings-switch-copy">
-                <p class="settings-switch-title">Show sensitive account details</p>
+                  <p class="settings-switch-title">Show sensitive connection details</p>
                 <p class="settings-switch-note">Display full names, provider IDs, and workspace identifiers.</p>
               </div>
               <span class="switch-control">
@@ -271,8 +277,8 @@
 
             <label class="settings-switch" for="settings-compact-cards">
               <div class="settings-switch-copy">
-                <p class="settings-switch-title">Compact account cards</p>
-                <p class="settings-switch-note">Use tighter spacing for a denser 3-column account view.</p>
+                  <p class="settings-switch-title">Compact connection cards</p>
+                  <p class="settings-switch-note">Use tighter spacing for a denser 3-column connection view.</p>
               </div>
               <span class="switch-control">
                 <input id="settings-compact-cards" type="checkbox" />
@@ -301,8 +307,8 @@
 
             <label class="settings-switch" for="settings-auto-refresh">
               <div class="settings-switch-copy">
-                <p class="settings-switch-title">Auto refresh dashboard</p>
-                <p class="settings-switch-note">Refresh usage and account status every 30 seconds.</p>
+                  <p class="settings-switch-title">Auto refresh dashboard</p>
+                  <p class="settings-switch-note">Refresh usage and connection status every 30 seconds.</p>
               </div>
               <span class="switch-control">
                 <input id="settings-auto-refresh" type="checkbox" />
@@ -312,8 +318,8 @@
 
             <label class="settings-switch" for="settings-confirm-removal">
               <div class="settings-switch-copy">
-                <p class="settings-switch-title">Confirm before removing an account</p>
-                <p class="settings-switch-note">Require explicit confirmation before account deletion.</p>
+                  <p class="settings-switch-title">Confirm before removing a connection</p>
+                  <p class="settings-switch-note">Require explicit confirmation before connection removal.</p>
               </div>
               <span class="switch-control">
                 <input id="settings-confirm-removal" type="checkbox" />
@@ -367,7 +373,7 @@
         <label for="api-link-display-name" class="form-label">Display name</label>
         <input id="api-link-display-name" name="displayName" type="text" class="custom-input" maxlength="120" />
 
-        <label for="api-link-provider-account-id" class="form-label">Provider account ID (optional)</label>
+        <label for="api-link-provider-account-id" class="form-label">Provider connection ID (optional)</label>
         <input id="api-link-provider-account-id" name="providerAccountId" type="text" class="custom-input"
           maxlength="160" />
 
@@ -388,11 +394,11 @@
       aria-labelledby="account-settings-title">
       <header class="connect-modal-header">
         <div>
-          <h3 id="account-settings-title">Account Settings</h3>
+          <h3 id="account-settings-title">Connection Settings</h3>
           <p id="account-settings-provider">Provider</p>
         </div>
         <button id="account-settings-close" class="btn btn-icon" type="button"
-          aria-label="Close account settings dialog">
+          aria-label="Close connection settings dialog">
           <i data-lucide="x"></i>
         </button>
       </header>
@@ -404,7 +410,7 @@
             <strong id="account-settings-auth"></strong>
           </div>
           <div class="account-settings-meta">
-            <span>Provider Account ID</span>
+            <span>Provider Connection ID</span>
             <strong id="account-settings-provider-account"></strong>
           </div>
           <div id="account-settings-oauth-profile-wrapper" class="account-settings-meta" hidden>

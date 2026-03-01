@@ -101,6 +101,15 @@ type AppContext = vm.Context & {
     }>;
     normalizedSearchQuery: string;
   };
+  shouldShowSidebarModelSearchClearButton: (value: unknown) => boolean;
+  sidebarProviderIssueView: (entry: unknown) => {
+    severity: string;
+    icon: string;
+    title: string;
+    items: string[];
+    action: string;
+    actionLabel: string;
+  } | null;
   collectTopbarIssues: () => Array<{
     type: string;
     message: string;
@@ -505,6 +514,59 @@ test("frontend sidebar search matches case-insensitive multi-token queries", () 
 
   assert.equal(context.matchesSidebarModelSearch("gemini/gemini-2.5-pro-preview", "2.5 preview"), true);
   assert.equal(context.matchesSidebarModelSearch("gemini/gemini-2.5-pro-preview", "2.5 sonnet"), false);
+});
+
+test("frontend sidebar search clear helper only shows clear action for non-empty query", () => {
+  const context = loadFrontendAppContext();
+
+  assert.equal(context.shouldShowSidebarModelSearchClearButton(""), false);
+  assert.equal(context.shouldShowSidebarModelSearchClearButton("   "), false);
+  assert.equal(context.shouldShowSidebarModelSearchClearButton("gemini"), true);
+  assert.equal(context.shouldShowSidebarModelSearchClearButton("  gemini  "), true);
+});
+
+test("frontend sidebar provider issue view maps severity and action metadata", () => {
+  const context = loadFrontendAppContext();
+
+  const noIssue = context.sidebarProviderIssueView({
+    status: "live",
+    syncError: "",
+  });
+  assert.equal(noIssue, null);
+
+  const warningIssue = JSON.parse(
+    JSON.stringify(
+      context.sidebarProviderIssueView({
+        status: "live",
+        syncError: "quota sync delayed",
+      }),
+    ),
+  ) as ReturnType<AppContext["sidebarProviderIssueView"]>;
+  assert.deepEqual(warningIssue, {
+    severity: "warning",
+    icon: "triangle-alert",
+    title: "Sync issue",
+    items: ["quota sync delayed"],
+    action: "open-settings-page",
+    actionLabel: "Open settings",
+  });
+
+  const errorIssue = JSON.parse(
+    JSON.stringify(
+      context.sidebarProviderIssueView({
+        status: "unavailable",
+        syncError: "provider usage endpoint failed",
+      }),
+    ),
+  ) as ReturnType<AppContext["sidebarProviderIssueView"]>;
+  assert.deepEqual(errorIssue, {
+    severity: "error",
+    icon: "circle-alert",
+    title: "Sync issue",
+    items: ["provider usage endpoint failed"],
+    action: "open-settings-page",
+    actionLabel: "Open settings",
+  });
 });
 
 test("frontend copySidebarModelId handles success, empty id, and missing clipboard", async () => {

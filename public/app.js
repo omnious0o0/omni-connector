@@ -26,6 +26,7 @@ const connectorKeyElement = document.querySelector("#connector-key");
 const accountsListElement = document.querySelector("#accounts-list");
 const sidebarModelsContentElement = document.querySelector("#sidebar-models-content");
 const sidebarModelsSearchInput = document.querySelector("#sidebar-models-search");
+const sidebarModelsSearchClearButton = document.querySelector("#sidebar-models-search-clear");
 const routingPriorityResultElement = document.querySelector("#routing-priority-result");
 const routingPriorityForm = document.querySelector("#routing-priority-form");
 const routingPreferredProviderInput = document.querySelector("#routing-preferred-provider");
@@ -2733,6 +2734,41 @@ function normalizeSidebarModelSearchQuery(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function shouldShowSidebarModelSearchClearButton(value) {
+  return normalizeSidebarModelSearchQuery(value).length > 0;
+}
+
+function syncSidebarModelsSearchControls() {
+  if (!(sidebarModelsSearchInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  if (!(sidebarModelsSearchClearButton instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const showClearButton = shouldShowSidebarModelSearchClearButton(sidebarModelsSearchInput.value);
+  sidebarModelsSearchClearButton.hidden = !showClearButton;
+  sidebarModelsSearchClearButton.disabled = !showClearButton;
+}
+
+function sidebarProviderIssueView(entry) {
+  const syncError = typeof entry?.syncError === "string" ? entry.syncError.trim() : "";
+  if (syncError.length === 0) {
+    return null;
+  }
+
+  const severity = entry?.status === "live" ? "warning" : "error";
+  return {
+    severity,
+    icon: severity === "warning" ? "triangle-alert" : "circle-alert",
+    title: "Sync issue",
+    items: [syncError],
+    action: "open-settings-page",
+    actionLabel: warningActionLabel("open-settings-page"),
+  };
+}
+
 function composeProviderModelId(providerId, modelId) {
   const providerPrefix = normalizeProviderId(providerId) ?? "";
   const normalizedModelId = typeof modelId === "string" ? modelId.trim().replace(/^\/+/, "") : "";
@@ -2824,6 +2860,7 @@ function renderSidebarModels(payload) {
   }
 
   const modelEntries = buildSidebarModelEntries(payload, sidebarModelsSearchQuery);
+  syncSidebarModelsSearchControls();
 
   if (modelEntries.totalProviders === 0) {
     const message =
@@ -2844,6 +2881,7 @@ function renderSidebarModels(payload) {
       const providerName = providerNameById(entry.provider);
       const statusText = entry.status === "live" ? "live" : "unavailable";
       const countLabel = entry.accountCount === 1 ? "1 connection" : `${entry.accountCount} connections`;
+      const issueView = sidebarProviderIssueView(entry);
       const modelList =
         entry.modelIds.length > 0
           ? `<ul class="sidebar-model-list">${entry.modelIds
@@ -2853,25 +2891,29 @@ function renderSidebarModels(payload) {
               )
               .join("")}</ul>`
           : '<p class="sidebar-models-empty">No model IDs returned.</p>';
-      const errorLine =
-        entry.syncError && entry.syncError.length > 0
-          ? `<p class="sidebar-model-provider-error">${escapeHtml(entry.syncError)}</p>`
+      const issueButton =
+        issueView
+          ? `<button class="btn btn-icon sidebar-model-provider-issue issue-tooltip-trigger ${escapeHtml(issueView.severity === "warning" ? "warn" : "error")}" type="button" aria-label="Open sync issue for ${escapeHtml(providerName)}" data-warning-title="${escapeHtml(issueView.title)}" data-warning-severity="${escapeHtml(issueView.severity)}" data-warning-items="${warningDataItems(issueView.items)}" data-warning-action="${escapeHtml(issueView.action)}" data-warning-action-label="${escapeHtml(issueView.actionLabel)}"><i data-lucide="${escapeHtml(issueView.icon)}"></i></button>`
           : "";
 
       return `
         <section class="sidebar-model-provider" data-provider="${escapeHtml(entry.provider)}">
           <div class="sidebar-model-provider-head">
             <h3>${escapeHtml(providerName)} (${escapeHtml(countLabel)})</h3>
-            <span class="sidebar-model-provider-status">${escapeHtml(statusText)}</span>
+            <div class="sidebar-model-provider-meta">
+              <span class="sidebar-model-provider-status">${escapeHtml(statusText)}</span>
+              ${issueButton}
+            </div>
           </div>
           ${modelList}
-          ${errorLine}
         </section>
       `;
     })
     .join("");
 
   sidebarModelsContentElement.innerHTML = markup;
+  bindConnectWarningTriggers();
+  reRenderIcons();
 }
 
 async function loadConnectedProviderModels() {
@@ -3869,6 +3911,18 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (targetElement.closest("#sidebar-models-search-clear")) {
+    if (sidebarModelsSearchInput instanceof HTMLInputElement) {
+      sidebarModelsSearchInput.value = "";
+      sidebarModelsSearchQuery = "";
+      syncSidebarModelsSearchControls();
+      renderSidebarModels(connectedProviderModelsPayload);
+      sidebarModelsSearchInput.focus();
+    }
+
+    return;
+  }
+
   if (targetElement.closest("#connect-trigger")) {
     openConnectModal();
     return;
@@ -4156,7 +4210,7 @@ if (accountSettingsForm instanceof HTMLFormElement) {
     }
 
     if (!selectedAccountSettingsId) {
-      showToast("No account selected.", true);
+      showToast("No connection selected.", true);
       return;
     }
 
@@ -4216,10 +4270,14 @@ if (accountSettingsDisplayNameInput instanceof HTMLInputElement) {
 }
 
 if (sidebarModelsSearchInput instanceof HTMLInputElement) {
-  sidebarModelsSearchInput.addEventListener("input", () => {
+  const handleSidebarModelsSearchInput = () => {
     sidebarModelsSearchQuery = normalizeSidebarModelSearchQuery(sidebarModelsSearchInput.value);
+    syncSidebarModelsSearchControls();
     renderSidebarModels(connectedProviderModelsPayload);
-  });
+  };
+
+  sidebarModelsSearchInput.addEventListener("input", handleSidebarModelsSearchInput);
+  sidebarModelsSearchInput.addEventListener("search", handleSidebarModelsSearchInput);
 }
 
 if (showSensitiveInput instanceof HTMLInputElement) {
@@ -4460,6 +4518,7 @@ window.addEventListener("load", async () => {
   refreshTopbarStatus();
   applySidebarState();
   applySettingsState();
+  syncSidebarModelsSearchControls();
   setActiveView(currentView);
   setConnectorControlsEnabled(false);
   checkConnectionToast();
