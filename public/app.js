@@ -1943,34 +1943,25 @@ function normalizedAccountQuotaWindows(account) {
     return orderedByDuration;
   }
 
-  const weeklyRemaining = Number(weeklyWindow.remaining);
-  if (!Number.isFinite(weeklyRemaining) || weeklyRemaining < 0) {
-    return orderedByDuration;
-  }
-
-  const cappedWeeklyRemaining = Math.max(weeklyRemaining, 0);
+  const weeklyRatio = clampRatio(Number(weeklyWindow.ratio));
   return orderedByDuration.map((windowView) => {
     if (windowView.slot === "weekly") {
       return windowView;
     }
 
+    const baseRatio = clampRatio(Number(windowView.ratio));
+    const cappedRatio = Math.min(baseRatio, weeklyRatio);
+    if (Math.abs(cappedRatio - baseRatio) < 0.0001) {
+      return windowView;
+    }
+
     const limit = Number(windowView.limit);
-    if (!Number.isFinite(limit) || limit <= 0) {
-      return windowView;
-    }
-
-    const baseRemainingRaw = Number(windowView.remaining);
-    const baseRemaining =
-      Number.isFinite(baseRemainingRaw) && baseRemainingRaw >= 0
-        ? Math.max(Math.min(baseRemainingRaw, limit), 0)
-        : Math.max(Math.min(limit * clampRatio(Number(windowView.ratio)), limit), 0);
-    const cappedRemaining = Math.max(Math.min(baseRemaining, cappedWeeklyRemaining), 0);
-    if (Math.abs(cappedRemaining - baseRemaining) < 0.0001) {
-      return windowView;
-    }
-
-    const cappedRatio = clampRatio(cappedRemaining / limit);
-    const cappedUsed = Math.max(limit - cappedRemaining, 0);
+    const cappedRemaining =
+      Number.isFinite(limit) && limit > 0
+        ? Math.max(Math.min(limit * cappedRatio, limit), 0)
+        : Number(windowView.remaining);
+    const cappedUsed =
+      Number.isFinite(limit) && limit > 0 ? Math.max(limit - cappedRemaining, 0) : Number(windowView.used);
     const remainingPercent = cappedRatio * 100;
     const usedPercent = 100 - remainingPercent;
 
@@ -2188,29 +2179,19 @@ function computeOverallQuotaRemainingPercent(accounts) {
       continue;
     }
 
-    const weeklyLimit = Number(weeklyWindow.limit);
-    const weeklyRemaining = Number(weeklyWindow.remaining);
-    if (Number.isFinite(weeklyLimit) && weeklyLimit > 0) {
-      const remainingCandidates = windows
-        .map((windowView) => Number(windowView?.remaining))
-        .filter((remaining) => Number.isFinite(remaining) && remaining >= 0);
-      const effectiveRemaining =
-        remainingCandidates.length > 0
-          ? Math.min(...remainingCandidates)
-          : Number.isFinite(weeklyRemaining)
-            ? Math.max(Math.min(weeklyRemaining, weeklyLimit), 0)
-            : weeklyLimit * clampRatio(Number(weeklyWindow.ratio));
-      const effectiveRatio = clampRatio(effectiveRemaining / weeklyLimit);
-      weightedPercentSum += effectiveRatio * 100 * weeklyLimit;
-      weightedLimitTotal += weeklyLimit;
-      continue;
-    }
-
     const baseWeeklyRatio = clampRatio(Number(weeklyWindow.ratio));
     const effectiveRatio = windows.reduce(
       (lowestRatio, windowView) => Math.min(lowestRatio, clampRatio(Number(windowView?.ratio))),
       baseWeeklyRatio,
     );
+
+    const weeklyLimit = Number(weeklyWindow.limit);
+    if (Number.isFinite(weeklyLimit) && weeklyLimit > 0) {
+      weightedPercentSum += effectiveRatio * 100 * weeklyLimit;
+      weightedLimitTotal += weeklyLimit;
+      continue;
+    }
+
     fallbackRatioSum += effectiveRatio;
     fallbackCount += 1;
   }
