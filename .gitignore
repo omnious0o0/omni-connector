@@ -2,6 +2,7 @@ node_modules/
 dist/
 data/
 .DS_Store
+Thumbs.db
 coverage/
 .env
 .env.*
@@ -10,3 +11,7 @@ AGENTS.md
 reference/
 .sisyphus/
 .ruff_cache/
+.idea/
+.vscode/
+__pycache__/
+*.pyc
