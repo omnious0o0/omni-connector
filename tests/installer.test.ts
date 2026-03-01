@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync, SpawnSyncReturns } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,16 @@ import test from "node:test";
 
 function readInstallerScript(): string {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  return fs.readFileSync(installerPath, "utf8");
+}
+
+function readUnixEntrypointInstallerScript(): string {
+  const installerPath = path.join(process.cwd(), "install.sh");
+  return fs.readFileSync(installerPath, "utf8");
+}
+
+function readWindowsEntrypointInstallerScript(): string {
+  const installerPath = path.join(process.cwd(), "install.ps1");
   return fs.readFileSync(installerPath, "utf8");
 }
 
@@ -47,6 +58,16 @@ function extractPlannedInstallerPhases(output: string): number {
   const parsed = Number.parseInt(phaseMatch[1] ?? "", 10);
   assert.equal(Number.isFinite(parsed), true);
   return parsed;
+}
+
+function fileSha256(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function sidecarSha256(filePath: string): string {
+  const checksumPath = `${filePath}.sha256`;
+  const line = fs.readFileSync(checksumPath, "utf8").split(/\r?\n/).find((entry) => entry.trim().length > 0) ?? "";
+  return (line.trim().split(/\s+/)[0] ?? "").toLowerCase();
 }
 
 test("installer persists PATH entries with idempotent shell guards", () => {
@@ -143,4 +164,52 @@ test("installer stage progress line uses compact width and prefixes phase counte
   assert.equal(typeof stageLineFormat === "string", true);
   assert.equal((stageLineFormat ?? "").includes("%b(%d/%d)%b  %s"), true);
   assert.equal((stageLineFormat ?? "").includes("%s  %b(%d/%d)%b"), false);
+});
+
+test("unix installer entrypoint is POSIX and enforces secure payload fetch", () => {
+  const script = readUnixEntrypointInstallerScript();
+
+  assert.equal(script.startsWith("#!/bin/sh\n"), true);
+  assert.equal(script.includes("default_install_script_url=\"https://raw.githubusercontent.com/${repo}/${ref}/scripts/install.sh\""), true);
+  assert.equal(script.includes('case "${install_script_url}" in'), true);
+  assert.equal(script.includes('case "${install_script_checksum_url}" in'), true);
+  assert.equal(script.includes('https://*) ;;'), true);
+  assert.equal(
+    script.includes(
+      "custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 or OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL",
+    ),
+    true,
+  );
+  assert.equal(script.includes("curl -fsSL -o"), true);
+  assert.equal(script.includes("wget -qO"), true);
+  assert.equal(script.includes("install_script_checksum_url"), true);
+  assert.equal(script.includes("ensure_bash()"), true);
+  assert.equal(script.includes("bash is required to run the omni-connector installer payload."), true);
+  assert.equal(script.includes("failed to install bash automatically"), true);
+  assert.equal(script.includes("exec env"), true);
+  assert.equal(script.includes('bash "${tmp_file}" "$@"'), true);
+});
+
+test("windows installer entrypoint validates archive and initializes runtime", () => {
+  const script = readWindowsEntrypointInstallerScript();
+
+  assert.equal(script.includes("#Requires -Version 5.1"), true);
+  assert.equal(
+    script.includes("custom OMNI_CONNECTOR_ARCHIVE_URL requires OMNI_CONNECTOR_ARCHIVE_SHA256"),
+    true,
+  );
+  assert.equal(script.includes("Invoke-WebRequest"), true);
+  assert.equal(script.includes("Get-FileHash"), true);
+  assert.equal(script.includes("npm install -g --ignore-scripts"), true);
+  assert.equal(script.includes("--init-only"), true);
+});
+
+test("installer checksum sidecars match installer script contents", () => {
+  const unixEntrypoint = path.join(process.cwd(), "install.sh");
+  const windowsEntrypoint = path.join(process.cwd(), "install.ps1");
+  const payloadInstaller = path.join(process.cwd(), "scripts", "install.sh");
+
+  assert.equal(sidecarSha256(unixEntrypoint), fileSha256(unixEntrypoint));
+  assert.equal(sidecarSha256(windowsEntrypoint), fileSha256(windowsEntrypoint));
+  assert.equal(sidecarSha256(payloadInstaller), fileSha256(payloadInstaller));
 });

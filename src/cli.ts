@@ -85,19 +85,87 @@ function printHelp(): void {
 function runSelfUpdate(): void {
   const repo = process.env.OMNI_CONNECTOR_REPO || "omnious0o0/omni-connector";
   const ref = process.env.OMNI_CONNECTOR_REF || "main";
+  const defaultInstallEntrypointUrl =
+    process.platform === "win32"
+      ? `https://raw.githubusercontent.com/${repo}/${ref}/install.ps1`
+      : `https://raw.githubusercontent.com/${repo}/${ref}/install.sh`;
+  const installEntrypointUrl =
+    process.env.OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL || defaultInstallEntrypointUrl;
+  const installEntrypointSha256 = process.env.OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256 || "";
+  const installEntrypointChecksumUrl =
+    process.env.OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL || `${installEntrypointUrl}.sha256`;
+  const defaultInstallScriptUrl = `https://raw.githubusercontent.com/${repo}/${ref}/scripts/install.sh`;
   const installScriptUrl =
-    process.env.OMNI_CONNECTOR_INSTALL_SCRIPT_URL || `https://raw.githubusercontent.com/${repo}/${ref}/scripts/install.sh`;
+    process.env.OMNI_CONNECTOR_INSTALL_SCRIPT_URL || defaultInstallScriptUrl;
   const installScriptSha256 = process.env.OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 || "";
+  const installScriptChecksumUrl =
+    process.env.OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL ||
+    (installScriptUrl === defaultInstallScriptUrl ? `${installScriptUrl}.sha256` : "");
+
+  if (
+    installScriptUrl !== defaultInstallScriptUrl &&
+    installScriptSha256.trim().length === 0 &&
+    installScriptChecksumUrl.trim().length === 0
+  ) {
+    throw new Error(
+      "custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 or OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL",
+    );
+  }
+
   const updateEnv: NodeJS.ProcessEnv = {
     ...process.env,
     OMNI_CONNECTOR_REPO: repo,
     OMNI_CONNECTOR_REF: ref,
+    OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL: installEntrypointUrl,
+    OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256: installEntrypointSha256,
+    OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL: installEntrypointChecksumUrl,
     OMNI_CONNECTOR_INSTALL_SCRIPT_URL: installScriptUrl,
     OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256: installScriptSha256,
+    OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL: installScriptChecksumUrl,
     OMNI_CONNECTOR_AUTO_START: "0",
     OMNI_CONNECTOR_AUTO_OPEN_BROWSER: "0",
     OMNI_CONNECTOR_SKIP_LOCAL_ENV: "1",
   };
+
+  if (process.platform === "win32") {
+    const windowsUpdateScript = [
+      "$ErrorActionPreference = 'Stop'",
+      "$tmpScript = [System.IO.Path]::GetTempFileName()",
+      "$tmpChecksum = [System.IO.Path]::GetTempFileName()",
+      "try {",
+      "  if (-not $env:OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL.StartsWith('https://')) { throw 'Installer URL must use HTTPS.' }",
+      "  if (-not $env:OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL.StartsWith('https://')) { throw 'Installer checksum URL must use HTTPS.' }",
+      "  Invoke-WebRequest -Uri $env:OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL -OutFile $tmpScript",
+      "  if ([string]::IsNullOrWhiteSpace($env:OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256)) {",
+      "    Invoke-WebRequest -Uri $env:OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL -OutFile $tmpChecksum",
+      "    $checksumLine = (Get-Content $tmpChecksum | Select-Object -First 1).Trim()",
+      "    $expected = ($checksumLine -split '\\s+')[0].ToLowerInvariant()",
+      "  } else {",
+      "    $expected = $env:OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256.Trim().ToLowerInvariant()",
+      "  }",
+      "  if ($expected -notmatch '^[0-9a-f]{64}$') { throw 'Installer checksum must resolve to a 64-character hex string' }",
+      "  $actual = (Get-FileHash -Path $tmpScript -Algorithm SHA256).Hash.ToLowerInvariant()",
+      "  if ($actual -ne $expected) { throw \"Installer checksum mismatch. Expected: $expected Actual: $actual\" }",
+      "  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tmpScript",
+      "  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+      "} finally {",
+      "  Remove-Item -Path $tmpScript, $tmpChecksum -Force -ErrorAction SilentlyContinue",
+      "}",
+    ].join("\n");
+
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", windowsUpdateScript], {
+      stdio: "inherit",
+      env: updateEnv,
+      cwd: os.homedir(),
+    });
+
+    if ((result.status ?? 1) !== 0) {
+      const statusSuffix = typeof result.status === "number" ? ` (exit ${result.status})` : "";
+      const signalSuffix = result.signal ? ` (signal ${result.signal})` : "";
+      throw new Error(`Update failed${statusSuffix}${signalSuffix}`);
+    }
+    return;
+  }
 
   const updateRunnerPath = path.join(os.homedir(), ".omni-connector", "install", "update.sh");
   if (fs.existsSync(updateRunnerPath)) {
@@ -117,45 +185,70 @@ function runSelfUpdate(): void {
   const updateScript = [
     "set -euo pipefail",
     "tmp_file=\"$(mktemp)\"",
-    "cleanup(){ rm -f \"${tmp_file}\"; }",
+    "checksum_file=\"$(mktemp)\"",
+    "cleanup(){ rm -f \"${tmp_file}\" \"${checksum_file}\"; }",
     "trap cleanup EXIT",
-    "default_install_script_url=\"https://raw.githubusercontent.com/${OMNI_CONNECTOR_REPO}/${OMNI_CONNECTOR_REF}/scripts/install.sh\"",
-    "if [ \"${OMNI_CONNECTOR_INSTALL_SCRIPT_URL}\" != \"${default_install_script_url}\" ] && [ -z \"${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}\" ]; then",
-    "  printf 'custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256\\n' >&2",
+    "default_install_entrypoint_url=\"https://raw.githubusercontent.com/${OMNI_CONNECTOR_REPO}/${OMNI_CONNECTOR_REF}/install.sh\"",
+    "if [ \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL}\" != \"${default_install_entrypoint_url}\" ] && [ -z \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256:-}\" ] && [ -z \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL:-}\" ]; then",
+    "  printf 'custom OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL requires OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256 or OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL\\n' >&2",
     "  exit 1",
     "fi",
+    "case \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL}\" in",
+    "  https://*) ;;",
+    "  *)",
+    "    printf 'Installer URL must use HTTPS.\\n' >&2",
+    "    exit 1",
+    "    ;;",
+    "esac",
+    "case \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL}\" in",
+    "  https://*) ;;",
+    "  *)",
+    "    printf 'Installer checksum URL must use HTTPS.\\n' >&2",
+    "    exit 1",
+    "    ;;",
+    "esac",
     "if command -v curl >/dev/null 2>&1; then",
-    "  curl -fsSL -o \"${tmp_file}\" \"${OMNI_CONNECTOR_INSTALL_SCRIPT_URL}\"",
+    "  curl -fsSL -o \"${tmp_file}\" \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL}\"",
     "elif command -v wget >/dev/null 2>&1; then",
-    "  wget -qO \"${tmp_file}\" \"${OMNI_CONNECTOR_INSTALL_SCRIPT_URL}\"",
+    "  wget -qO \"${tmp_file}\" \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL}\"",
     "else",
     "  printf 'Update requires curl or wget in PATH\\n' >&2",
     "  exit 1",
     "fi",
-    "if [ -n \"${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}\" ]; then",
-    "  expected_checksum=\"$(printf '%s' \"${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256}\" | tr '[:upper:]' '[:lower:]')\"",
-    "  if ! printf '%s' \"${expected_checksum}\" | grep -Eq '^[0-9a-f]{64}$'; then",
-    "    printf 'OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 must be a 64-character hex string\\n' >&2",
-    "    exit 1",
-    "  fi",
-    "  if command -v sha256sum >/dev/null 2>&1; then",
-    "    actual_checksum=\"$(sha256sum \"${tmp_file}\" | awk '{print $1}')\"",
-    "  elif command -v shasum >/dev/null 2>&1; then",
-    "    actual_checksum=\"$(shasum -a 256 \"${tmp_file}\" | awk '{print $1}')\"",
-    "  elif command -v openssl >/dev/null 2>&1; then",
-    "    actual_checksum=\"$(openssl dgst -sha256 \"${tmp_file}\" | awk '{print $2}')\"",
+    "if [ -n \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256:-}\" ]; then",
+    "  expected_checksum=\"$(printf '%s' \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256}\" | tr '[:upper:]' '[:lower:]')\"",
+    "else",
+    "  if command -v curl >/dev/null 2>&1; then",
+    "    curl -fsSL -o \"${checksum_file}\" \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL}\"",
+    "  elif command -v wget >/dev/null 2>&1; then",
+    "    wget -qO \"${checksum_file}\" \"${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL}\"",
     "  else",
-    "    printf 'Checksum verification requires sha256sum, shasum, or openssl\\n' >&2",
+    "    printf 'Update requires curl or wget in PATH\\n' >&2",
     "    exit 1",
     "  fi",
-    "  if [ \"${actual_checksum}\" != \"${expected_checksum}\" ]; then",
-    "    printf 'Installer checksum mismatch\\n' >&2",
-    "    printf 'Expected: %s\\n' \"${expected_checksum}\" >&2",
-    "    printf 'Actual:   %s\\n' \"${actual_checksum}\" >&2",
-    "    exit 1",
-    "  fi",
+    "  expected_checksum=\"$(awk 'NF { print $1; exit }' \"${checksum_file}\" | tr '[:upper:]' '[:lower:]')\"",
     "fi",
-    "OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 bash \"${tmp_file}\"",
+    "if ! printf '%s' \"${expected_checksum}\" | grep -Eq '^[0-9a-f]{64}$'; then",
+    "    printf 'Installer checksum must resolve to a 64-character hex string\\n' >&2",
+    "    exit 1",
+    "fi",
+    "if command -v sha256sum >/dev/null 2>&1; then",
+    "  actual_checksum=\"$(sha256sum \"${tmp_file}\" | awk '{print $1}')\"",
+    "elif command -v shasum >/dev/null 2>&1; then",
+    "  actual_checksum=\"$(shasum -a 256 \"${tmp_file}\" | awk '{print $1}')\"",
+    "elif command -v openssl >/dev/null 2>&1; then",
+    "  actual_checksum=\"$(openssl dgst -sha256 \"${tmp_file}\" | awk '{print $2}')\"",
+    "else",
+    "  printf 'Checksum verification requires sha256sum, shasum, or openssl\\n' >&2",
+    "  exit 1",
+    "fi",
+    "if [ \"${actual_checksum}\" != \"${expected_checksum}\" ]; then",
+    "  printf 'Installer checksum mismatch\\n' >&2",
+    "  printf 'Expected: %s\\n' \"${expected_checksum}\" >&2",
+    "  printf 'Actual:   %s\\n' \"${actual_checksum}\" >&2",
+    "  exit 1",
+    "fi",
+    "OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 sh \"${tmp_file}\"",
   ].join("\n");
 
   const result = spawnSync("bash", ["-lc", updateScript], {

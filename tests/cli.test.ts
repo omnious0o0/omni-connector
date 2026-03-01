@@ -45,9 +45,8 @@ test("--update requires checksum when using a custom installer script URL", () =
     const output = combinedOutput(result);
     assert.match(
       output,
-      /custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256/i,
+      /custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 or OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL/i,
     );
-    assert.match(output, /Update failed/i);
   } finally {
     fs.rmSync(workingDirectory, { recursive: true, force: true });
   }
@@ -107,4 +106,28 @@ test("OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 ignores .env DATA_FILE override during ini
   } finally {
     fs.rmSync(workingDirectory, { recursive: true, force: true });
   }
+});
+
+test("--update fallback script uses root install.sh entrypoint with sh", () => {
+  const cliPath = path.join(process.cwd(), "src", "cli.ts");
+  const source = fs.readFileSync(cliPath, "utf8");
+
+  assert.equal(source.includes("OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL"), true);
+  assert.equal(source.includes("OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL"), true);
+  assert.equal(
+    source.includes("https://raw.githubusercontent.com/${repo}/${ref}/install.sh"),
+    true,
+  );
+  assert.equal(
+    source.includes("https://raw.githubusercontent.com/${repo}/${ref}/install.ps1"),
+    true,
+  );
+  assert.equal(
+    source.includes(
+      "default_install_entrypoint_url=\\\"https://raw.githubusercontent.com/${OMNI_CONNECTOR_REPO}/${OMNI_CONNECTOR_REF}/install.sh\\\"",
+    ),
+    true,
+  );
+  assert.equal(source.includes("OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 sh \\\"${tmp_file}\\\""), true);
+  assert.equal(source.includes("powershell.exe"), true);
 });

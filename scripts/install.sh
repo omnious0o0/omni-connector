@@ -689,56 +689,89 @@ fi
 
 repo="\${OMNI_CONNECTOR_REPO:-${repo}}"
 ref="\${OMNI_CONNECTOR_REF:-${ref}}"
+install_entrypoint_url="\${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL:-https://raw.githubusercontent.com/\${repo}/\${ref}/install.sh}"
+install_entrypoint_sha256="\${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256:-\${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}}"
+install_entrypoint_checksum_url="\${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL:-\${install_entrypoint_url}.sha256}"
+default_install_entrypoint_url="https://raw.githubusercontent.com/\${repo}/\${ref}/install.sh"
 install_script_url="\${OMNI_CONNECTOR_INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/\${repo}/\${ref}/scripts/install.sh}"
-install_script_sha256="\${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-${install_script_sha256}}"
+install_script_sha256="\${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}"
 default_install_script_url="https://raw.githubusercontent.com/\${repo}/\${ref}/scripts/install.sh"
+install_script_checksum_url="\${OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL:-}"
+if [[ -z "\${install_script_checksum_url}" && "\${install_script_url}" == "\${default_install_script_url}" ]]; then
+  install_script_checksum_url="\${install_script_url}.sha256"
+fi
 
-if [[ "\${install_script_url}" != "\${default_install_script_url}" && -z "\${install_script_sha256}" ]]; then
-  printf "custom OMNI_CONNECTOR_INSTALL_SCRIPT_URL requires OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256\\n" >&2
+if [[ "\${install_entrypoint_url}" != "\${default_install_entrypoint_url}" && -z "\${install_entrypoint_sha256}" && -z "\${OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL:-}" ]]; then
+  printf "custom OMNI_CONNECTOR_INSTALL_ENTRYPOINT_URL requires OMNI_CONNECTOR_INSTALL_ENTRYPOINT_SHA256 or OMNI_CONNECTOR_INSTALL_ENTRYPOINT_CHECKSUM_URL\\n" >&2
+  exit 1
+fi
+
+if [[ "\${install_entrypoint_url}" != https://* ]]; then
+  printf "Installer URL must use HTTPS\\n" >&2
+  exit 1
+fi
+
+if [[ "\${install_entrypoint_checksum_url}" != https://* ]]; then
+  printf "Installer checksum URL must use HTTPS\\n" >&2
   exit 1
 fi
 
 tmp_file="\$(mktemp)"
+checksum_file="\$(mktemp)"
 cleanup() {
-  rm -f "\${tmp_file}"
+  rm -f "\${tmp_file}" "\${checksum_file}"
 }
 trap cleanup EXIT
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL -o "\${tmp_file}" "\${install_script_url}"
+  curl -fsSL -o "\${tmp_file}" "\${install_entrypoint_url}"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "\${tmp_file}" "\${install_script_url}"
+  wget -qO "\${tmp_file}" "\${install_entrypoint_url}"
 else
   exit 1
 fi
 
-if [[ -n "\${install_script_sha256}" ]]; then
-  expected_checksum="\$(printf '%s' "\${install_script_sha256}" | tr '[:upper:]' '[:lower:]')"
-  if [[ ! "\${expected_checksum}" =~ ^[0-9a-f]{64}$ ]]; then
-    printf "OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256 must be a 64-character hex string\\n" >&2
-    exit 1
-  fi
-
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual_checksum="\$(sha256sum "\${tmp_file}" | awk '{print \$1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual_checksum="\$(shasum -a 256 "\${tmp_file}" | awk '{print \$1}')"
-  elif command -v openssl >/dev/null 2>&1; then
-    actual_checksum="\$(openssl dgst -sha256 "\${tmp_file}" | awk '{print \$2}')"
+if [[ -n "\${install_entrypoint_sha256}" ]]; then
+  expected_checksum="\$(printf '%s' "\${install_entrypoint_sha256}" | tr '[:upper:]' '[:lower:]')"
+else
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "\${checksum_file}" "\${install_entrypoint_checksum_url}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "\${checksum_file}" "\${install_entrypoint_checksum_url}"
   else
-    printf "Checksum verification requires sha256sum, shasum, or openssl\\n" >&2
     exit 1
   fi
 
-  if [[ "\${actual_checksum}" != "\${expected_checksum}" ]]; then
-    printf "Installer checksum mismatch\\n" >&2
-    printf "Expected: %s\\n" "\${expected_checksum}" >&2
-    printf "Actual:   %s\\n" "\${actual_checksum}" >&2
-    exit 1
-  fi
+  expected_checksum="\$(awk 'NF { print \$1; exit }' "\${checksum_file}" | tr '[:upper:]' '[:lower:]')"
 fi
 
-OMNI_CONNECTOR_AUTO_START=0 OMNI_CONNECTOR_AUTO_OPEN_BROWSER=0 OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 bash "\${tmp_file}"
+if [[ ! "\${expected_checksum}" =~ ^[0-9a-f]{64}$ ]]; then
+  printf "Installer checksum must resolve to a 64-character hex string\\n" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_checksum="\$(sha256sum "\${tmp_file}" | awk '{print \$1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual_checksum="\$(shasum -a 256 "\${tmp_file}" | awk '{print \$1}')"
+elif command -v openssl >/dev/null 2>&1; then
+  actual_checksum="\$(openssl dgst -sha256 "\${tmp_file}" | awk '{print \$2}')"
+else
+  printf "Checksum verification requires sha256sum, shasum, or openssl\\n" >&2
+  exit 1
+fi
+
+if [[ "\${actual_checksum}" != "\${expected_checksum}" ]]; then
+  printf "Installer checksum mismatch\\n" >&2
+  printf "Expected: %s\\n" "\${expected_checksum}" >&2
+  printf "Actual:   %s\\n" "\${actual_checksum}" >&2
+  exit 1
+fi
+
+OMNI_CONNECTOR_INSTALL_SCRIPT_URL="\${install_script_url}" \
+OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256="\${install_script_sha256}" \
+OMNI_CONNECTOR_INSTALL_SCRIPT_CHECKSUM_URL="\${install_script_checksum_url}" \
+OMNI_CONNECTOR_AUTO_START=0 OMNI_CONNECTOR_AUTO_OPEN_BROWSER=0 OMNI_CONNECTOR_SKIP_LOCAL_ENV=1 sh "\${tmp_file}"
 EOF
 
   chmod +x "${update_runner_path}"
