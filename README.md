@@ -4,10 +4,11 @@ omni-connector is a simple interface to connect & track all your AI service prov
 
 ## Installation
 
-Use the global installer one-liner:
+Use the global installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh | bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh
+bash install.sh
 ```
 
 Then start it with:
@@ -22,6 +23,8 @@ omni-connector
 
 - `omni-connector` - Start the globally installed server
 - `omni-connector --init-only` - Initialize runtime files without starting the server
+- `omni-connector --update` - Trigger a manual update check and install
+- `pn --upd` - Shortcut update command
 - `npm run dev` - Run in watch mode via `tsx`
 - `npm run typecheck` - Type-check without building
 - `npm run test` - Run the test suite
@@ -30,10 +33,19 @@ omni-connector
 
 ## Updating
 
-To upgrade, run the same installer command again:
+To upgrade manually, use:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh | bash
+omni-connector --update
+# or
+pn --upd
+```
+
+If you prefer rerunning the installer directly:
+
+```bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh
+bash install.sh
 ```
 
 Then restart with `omni-connector`.

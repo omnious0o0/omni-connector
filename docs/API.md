@@ -43,10 +43,19 @@ That's all. The agent will handle the rest.
 
 ## Updating
 
-- Re-run the installer to get the latest version:
+- Run a manual update:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh | bash
+omni-connector --update
+# or
+pn --upd
+```
+
+- Or re-run the installer to get the latest version:
+
+```bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/omnious0o0/omni-connector/main/scripts/install.sh
+bash install.sh
 ```
 
 - Restart `omni-connector` after upgrading.
