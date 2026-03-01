@@ -205,7 +205,7 @@ function sanitizeOAuthErrorDescription(rawDescription: string): string | null {
   return cleaned.slice(0, OAUTH_ERROR_DESCRIPTION_MAX_LENGTH);
 }
 
-function safeErrorMessage(error: unknown): string {
+export function safeErrorMessage(error: unknown): string {
   const rawMessage =
     error instanceof Error && error.message.trim().length > 0
       ? error.message
@@ -217,8 +217,16 @@ function safeErrorMessage(error: unknown): string {
   }
 
   return normalized
-    .replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi, "$1[redacted]")
+    .replace(
+      /([?&](?:key|api_key|apikey|token|access_token|refresh_token|client_secret|clientsecret|id_token|idtoken)=)([^&\s]+)/gi,
+      "$1[redacted]",
+    )
     .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]")
+    .replace(/(\bBasic\s+)[A-Za-z0-9+/=._~-]+/gi, "$1[redacted]")
+    .replace(
+      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|id[_-]?token|authorization)["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+      "$1[redacted]",
+    )
     .slice(0, 220);
 }
 
@@ -536,14 +544,21 @@ export function createOAuthRouter(dependencies: OAuthRouterDependencies): Router
       verificationLastCompletedState: state,
     });
 
+    let syncFailed = false;
     try {
       await dependencies.connectorService.syncAccountStateNow();
+      const syncState = dependencies.connectorService.quotaSyncStateForAccount(flow.accountId);
+      const verificationStillRequired = syncState.issue?.kind === "account_verification_required";
+      if (verificationStillRequired || syncState.status !== "live" || syncState.error !== null) {
+        syncFailed = true;
+      }
     } catch (error) {
+      syncFailed = true;
       const message = safeErrorMessage(error);
       process.stderr.write(`Verification sync failed for account ${flow.accountId}: ${message}\n`);
     }
 
-    res.redirect("/?verified=1");
+    res.redirect(syncFailed ? "/?verified=1&sync=failed" : "/?verified=1");
   });
 
   return router;

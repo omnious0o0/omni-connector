@@ -2539,7 +2539,7 @@ test("opens verification helper and returns to dashboard after completion", asyn
     const completionSessionId = extractSessionIdFromSetCookie(completion.headers["set-cookie"]);
     assert.ok(completionSessionId);
     assert.notEqual(completionSessionId, launchSessionId);
-    assert.equal(completion.headers.location, "/?verified=1");
+    assert.equal(completion.headers.location, "/?verified=1&sync=failed");
 
     const completionReplay = await agent
       .get("/verification/complete")

@@ -164,15 +164,15 @@ const ESTIMATE_SMOOTHING_ALPHA = 0.25;
 function redactSensitiveLogText(input: string): string {
   return input
     .replace(
-      /([?&](?:key|api_key|apikey|token|access_token|refresh_token)=)([^&\s]+)/gi,
-      "$1[redacted]",
-    )
-    .replace(
-      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+      /([?&](?:key|api_key|apikey|token|access_token|refresh_token|client_secret|clientsecret|id_token|idtoken)=)([^&\s]+)/gi,
       "$1[redacted]",
     )
     .replace(/(\bBearer\s+)[A-Za-z0-9._~-]+/gi, "$1[redacted]")
-    .replace(/(\bBasic\s+)[A-Za-z0-9+/=._~-]+/gi, "$1[redacted]");
+    .replace(/(\bBasic\s+)[A-Za-z0-9+/=._~-]+/gi, "$1[redacted]")
+    .replace(
+      /(["']?(?:key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|id[_-]?token|authorization)["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+      "$1[redacted]",
+    );
 }
 
 function syncErrorDetail(error: unknown, fallback: string): string {
@@ -380,6 +380,28 @@ export class ConnectorService {
     }
 
     return account.quotaSyncIssue ?? null;
+  }
+
+  public quotaSyncStateForAccount(accountId: string): {
+    status: "live" | "stale" | "unavailable" | null;
+    error: string | null;
+    issue: QuotaSyncIssue | null;
+  } {
+    const normalizedAccountId = accountId.trim();
+    if (normalizedAccountId.length === 0) {
+      throw new HttpError(400, "invalid_account_id", "Account ID is required.");
+    }
+
+    const account = this.accounts.read().accounts.find((candidate) => candidate.id === normalizedAccountId);
+    if (!account) {
+      throw new HttpError(404, "account_not_found", "Account could not be found.");
+    }
+
+    return {
+      status: account.quotaSyncStatus ?? null,
+      error: account.quotaSyncError ?? null,
+      issue: account.quotaSyncIssue ?? null,
+    };
   }
 
   public async syncAccountStateNow(): Promise<void> {
