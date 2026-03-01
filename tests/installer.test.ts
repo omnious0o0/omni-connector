@@ -1,11 +1,52 @@
 import assert from "node:assert/strict";
+import { spawnSync, SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 function readInstallerScript(): string {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
   return fs.readFileSync(installerPath, "utf8");
+}
+
+function runInstallerDryRun(envOverrides: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
+  const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "omni-installer-dry-run-"));
+
+  try {
+    return spawnSync("bash", [installerPath], {
+      encoding: "utf8",
+      timeout: 25_000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        OMNI_CONNECTOR_INSTALLER_DRY_RUN: "1",
+        OMNI_CONNECTOR_AUTO_START: "0",
+        ...envOverrides,
+      },
+    });
+  } finally {
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
+  }
+}
+
+function combinedOutput(result: SpawnSyncReturns<string>): string {
+  return `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+}
+
+function extractPlannedInstallerPhases(output: string): number {
+  const phaseMatch = output.match(/Planned installer phases:\s*(\d+)/);
+  assert.notEqual(phaseMatch, null);
+
+  if (!phaseMatch) {
+    return Number.NaN;
+  }
+
+  const parsed = Number.parseInt(phaseMatch[1] ?? "", 10);
+  assert.equal(Number.isFinite(parsed), true);
+  return parsed;
 }
 
 test("installer persists PATH entries with idempotent shell guards", () => {
@@ -41,4 +82,47 @@ test("shell auto-update fallback records last-run epoch only after a successful 
     script.includes('printf "%s" "${current_epoch}" >"${last_run_file}"\nif ! "${update_runner_path}" >>"${log_file}" 2>&1; then'),
     false,
   );
+});
+
+test("installer dry-run phase count stays consistent between source and global-target flows", () => {
+  const sourceInstallResult = runInstallerDryRun();
+  assert.equal(sourceInstallResult.error, undefined);
+  assert.equal(sourceInstallResult.status, 0);
+  assert.equal(sourceInstallResult.signal, null);
+
+  const sourcePhaseCount = extractPlannedInstallerPhases(combinedOutput(sourceInstallResult));
+  assert.equal(sourcePhaseCount, 5);
+
+  const globalTargetResult = runInstallerDryRun({
+    OMNI_CONNECTOR_INSTALL_TARGET: "omni-connector@latest",
+  });
+  assert.equal(globalTargetResult.error, undefined);
+  assert.equal(globalTargetResult.status, 0);
+  assert.equal(globalTargetResult.signal, null);
+
+  const globalTargetPhaseCount = extractPlannedInstallerPhases(combinedOutput(globalTargetResult));
+  assert.equal(globalTargetPhaseCount, 5);
+});
+
+test("installer dry-run adds exactly one phase when auto-start is enabled", () => {
+  const withAutoStartResult = runInstallerDryRun({
+    OMNI_CONNECTOR_AUTO_START: "1",
+  });
+  assert.equal(withAutoStartResult.error, undefined);
+  assert.equal(withAutoStartResult.status, 0);
+  assert.equal(withAutoStartResult.signal, null);
+
+  const phaseCount = extractPlannedInstallerPhases(combinedOutput(withAutoStartResult));
+  assert.equal(phaseCount, 6);
+});
+
+test("installer download steps use spinner-friendly quiet transfer flags", () => {
+  const script = readInstallerScript();
+
+  assert.equal(script.includes("curl -fsSL"), true);
+  assert.equal(script.includes("wget -q -O"), true);
+  assert.equal(script.includes("curl --progress-bar"), false);
+  assert.equal(script.includes("wget --progress=bar:force:noscroll"), false);
+  assert.equal(script.includes('run_with_spinner "Downloading source archive" download_file'), true);
+  assert.equal(script.includes('run_with_spinner "Downloading nvm installer" download_file'), true);
 });

@@ -316,12 +316,12 @@ download_file() {
   local destination_path="$2"
 
   if command_exists curl; then
-    curl --progress-bar -fL "${source_url}" -o "${destination_path}"
+    curl -fsSL "${source_url}" -o "${destination_path}"
     return
   fi
 
   if command_exists wget; then
-    wget --progress=bar:force:noscroll -O "${destination_path}" "${source_url}"
+    wget -q -O "${destination_path}" "${source_url}"
     return
   fi
 
@@ -342,8 +342,7 @@ bootstrap_node_with_nvm() {
   if [[ ! -s "${nvm_dir}/nvm.sh" ]]; then
     local nvm_installer_path
     nvm_installer_path="$(mktemp)"
-    print_step "Installing nvm runtime manager"
-    download_file "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" "${nvm_installer_path}"
+    run_with_spinner "Downloading nvm installer" download_file "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" "${nvm_installer_path}"
     run_with_spinner "Bootstrapping nvm" bash "${nvm_installer_path}"
     rm -f "${nvm_installer_path}"
   fi
@@ -920,9 +919,6 @@ install_script_sha256="${OMNI_CONNECTOR_INSTALL_SCRIPT_SHA256:-}"
 install_target="${OMNI_CONNECTOR_INSTALL_TARGET:-}"
 
 stage_total=5
-if [[ -z "${install_target}" ]]; then
-  stage_total=$((stage_total + 1))
-fi
 if [[ "${OMNI_CONNECTOR_AUTO_START:-1}" == "1" ]]; then
   stage_total=$((stage_total + 1))
 fi
@@ -983,8 +979,7 @@ else
   trap cleanup_tmp EXIT
 
   archive_path="${tmp_dir}/omni-connector.tar.gz"
-  print_step "Downloading source archive"
-  download_file "${archive_url}" "${archive_path}"
+  run_with_spinner "Downloading source archive" download_file "${archive_url}" "${archive_path}"
   verify_archive_checksum_if_configured "${archive_path}" "${archive_sha256}"
 
   print_step "Extracting source archive"
