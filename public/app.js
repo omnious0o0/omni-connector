@@ -24,6 +24,7 @@ const rememberPageTabInput = document.querySelector("#settings-remember-page-tab
 const keyAccessNote = document.querySelector("#key-access-note");
 const connectorKeyElement = document.querySelector("#connector-key");
 const accountsListElement = document.querySelector("#accounts-list");
+const accountsInlineErrorElement = document.querySelector("#accounts-inline-error");
 const connectionsHeadingElement = document.querySelector("#connections-heading");
 const sidebarModelsContentElement = document.querySelector("#sidebar-models-content");
 const sidebarModelsSearchInput = document.querySelector("#sidebar-models-search");
@@ -38,6 +39,7 @@ const rotateKeyButton = document.querySelector("#rotate-key");
 const copyKeyButton = document.querySelector("#copy-key");
 const keyVisibilityButton = document.querySelector("#toggle-key-visibility");
 const connectTriggerButton = document.querySelector("#connect-trigger");
+const refreshDashboardButton = document.querySelector("#refresh-dashboard");
 const connectModalElement = document.querySelector("#connect-modal");
 const connectProviderListElement = document.querySelector("#connect-provider-list");
 const connectModalCloseButton = document.querySelector("#connect-modal-close");
@@ -48,6 +50,7 @@ const apiLinkDisplayNameInput = document.querySelector("#api-link-display-name")
 const apiLinkProviderAccountIdInput = document.querySelector("#api-link-provider-account-id");
 const apiLinkKeyInput = document.querySelector("#api-link-key");
 const apiLinkCancelButton = document.querySelector("#api-link-cancel");
+const apiLinkSubmitButton = document.querySelector("#api-link-submit");
 const accountSettingsModalElement = document.querySelector("#account-settings-modal");
 const accountSettingsCloseButton = document.querySelector("#account-settings-close");
 const accountSettingsForm = document.querySelector("#account-settings-form");
@@ -63,6 +66,7 @@ const accountSettingsSyncGuidanceStepsElement = document.querySelector("#account
 const accountSettingsSyncGuidanceActionElement = document.querySelector("#account-settings-sync-guidance-action");
 const accountSettingsDisplayNameInput = document.querySelector("#account-settings-display-name");
 const accountSettingsCancelButton = document.querySelector("#account-settings-cancel");
+const accountSettingsSaveButton = document.querySelector("#account-settings-save");
 
 let dashboard = null;
 let toastTimer = null;
@@ -99,10 +103,14 @@ let strictLiveQuotaEnabled = false;
 let connectWarningTooltipElement = null;
 let activeWarningTrigger = null;
 let connectWarningTooltipHideTimer = null;
+let warningTooltipPositionFrame = null;
+let iconRenderFrame = null;
 let connectedProviderModelsPayload = {
   providers: [],
 };
 let connectedProviderModelsError = null;
+let connectedProviderModelsLastLoadedAt = 0;
+let connectedProviderModelsInFlight = null;
 let sidebarModelsSearchQuery = "";
 let quotaCadenceConsensusByScope = new Map();
 let latestTopbarIssues = [];
@@ -134,10 +142,11 @@ const LEGACY_STORAGE_KEYS = Object.freeze(
 );
 
 const AUTO_REFRESH_INTERVAL_MS = 30_000;
+const CONNECTED_MODELS_REFRESH_INTERVAL_MS = 5 * 60_000;
 const KNOWN_PROVIDER_IDS = ["codex", "gemini", "claude", "openrouter"];
 const CONNECT_WARNING_TOOLTIP_ID = "connect-provider-warning-tooltip";
 
-function reRenderIcons() {
+function renderIconsNow() {
   if (window.lucide) {
     lucide.createIcons();
   }
@@ -153,21 +162,47 @@ function reRenderIcons() {
   }
 }
 
+function reRenderIcons() {
+  const scheduleFrame =
+    typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : null;
+
+  if (!scheduleFrame) {
+    renderIconsNow();
+    return;
+  }
+
+  if (iconRenderFrame !== null) {
+    return;
+  }
+
+  iconRenderFrame = scheduleFrame(() => {
+    iconRenderFrame = null;
+    renderIconsNow();
+  });
+}
+
 reRenderIcons();
 
 function setDescribedByToken(element, token, enabled) {
-  const current = (element.getAttribute("aria-describedby") ?? "").trim();
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+
+  const attributeName = "aria-controls";
+  const current = (element.getAttribute(attributeName) ?? "").trim();
   const tokens = current.length > 0 ? current.split(/\s+/) : [];
   const next = enabled
     ? [...new Set([...tokens, token])]
     : tokens.filter((entry) => entry !== token);
 
   if (next.length > 0) {
-    element.setAttribute("aria-describedby", next.join(" "));
+    element.setAttribute(attributeName, next.join(" "));
     return;
   }
 
-  element.removeAttribute("aria-describedby");
+  element.removeAttribute(attributeName);
 }
 
 function applyModalIsolationTargetState(target, isolated) {
@@ -306,7 +341,10 @@ function ensureConnectWarningTooltipElement() {
   element.id = CONNECT_WARNING_TOOLTIP_ID;
   element.className = "connect-provider-warning-floating";
   element.hidden = true;
-  element.setAttribute("role", "tooltip");
+  element.setAttribute("role", "dialog");
+  element.setAttribute("aria-modal", "false");
+  element.setAttribute("aria-label", "Connection warnings");
+  element.tabIndex = -1;
   element.addEventListener("mouseenter", () => {
     clearConnectWarningTooltipHideTimer();
   });
@@ -392,6 +430,39 @@ function positionConnectWarningTooltip(trigger, tooltip) {
 
   tooltip.style.left = `${Math.round(left)}px`;
   tooltip.style.top = `${Math.round(top)}px`;
+}
+
+function requestConnectWarningTooltipReposition() {
+  const scheduleFrame =
+    typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : null;
+
+  if (!scheduleFrame) {
+    if (
+      activeWarningTrigger instanceof HTMLElement &&
+      connectWarningTooltipElement instanceof HTMLElement &&
+      !connectWarningTooltipElement.hidden
+    ) {
+      positionConnectWarningTooltip(activeWarningTrigger, connectWarningTooltipElement);
+    }
+    return;
+  }
+
+  if (warningTooltipPositionFrame !== null) {
+    return;
+  }
+
+  warningTooltipPositionFrame = scheduleFrame(() => {
+    warningTooltipPositionFrame = null;
+    if (
+      activeWarningTrigger instanceof HTMLElement &&
+      connectWarningTooltipElement instanceof HTMLElement &&
+      !connectWarningTooltipElement.hidden
+    ) {
+      positionConnectWarningTooltip(activeWarningTrigger, connectWarningTooltipElement);
+    }
+  });
 }
 
 function hideConnectWarningTooltip() {
@@ -495,6 +566,7 @@ function bindConnectWarningTriggers() {
     }
 
     trigger.dataset.warningBound = "1";
+    trigger.setAttribute("aria-haspopup", "dialog");
 
     trigger.addEventListener("mouseenter", () => {
       showConnectWarningTooltip(trigger);
@@ -1145,6 +1217,33 @@ function showToast(message, isError = false) {
     toastElement.classList.remove("visible");
     toastTimer = null;
   }, 4000);
+}
+
+async function withBusyButton(button, action) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return await action();
+  }
+
+  if (button.dataset.omniBusy === "1") {
+    return;
+  }
+
+  const previouslyDisabled = button.disabled;
+  button.dataset.omniBusy = "1";
+  button.disabled = true;
+  button.classList.add("is-loading");
+  button.setAttribute("aria-busy", "true");
+
+  try {
+    return await action();
+  } finally {
+    button.classList.remove("is-loading");
+    button.removeAttribute("aria-busy");
+    if (!previouslyDisabled) {
+      button.disabled = false;
+    }
+    delete button.dataset.omniBusy;
+  }
 }
 
 function escapeHtml(value) {
@@ -2506,6 +2605,28 @@ function setAccountsListBusy(isBusy) {
   accountsListElement.setAttribute("aria-busy", isBusy ? "true" : "false");
 }
 
+function clearAccountsInlineError() {
+  if (!(accountsInlineErrorElement instanceof HTMLElement)) {
+    return;
+  }
+
+  accountsInlineErrorElement.hidden = true;
+  accountsInlineErrorElement.textContent = "";
+}
+
+function setAccountsInlineError(message) {
+  if (!(accountsInlineErrorElement instanceof HTMLElement)) {
+    return;
+  }
+
+  const details =
+    typeof message === "string" && message.trim().length > 0
+      ? message.trim()
+      : "Could not refresh dashboard data. Click Refresh to retry.";
+  accountsInlineErrorElement.textContent = details;
+  accountsInlineErrorElement.hidden = false;
+}
+
 function renderAccountsLoadError(message) {
   updateConnectionsHeading(0);
 
@@ -2527,6 +2648,7 @@ function renderAccountsLoadError(message) {
       <p>${escapeHtml(details)}</p>
     </div>
   `;
+  setAccountsInlineError(details);
   setAccountsListBusy(false);
   reRenderIcons();
 }
@@ -2537,6 +2659,7 @@ function renderAccounts(accounts) {
 
   if (!accountsListElement) return;
   setAccountsListBusy(false);
+  clearAccountsInlineError();
 
   if (accountCount === 0) {
     accountsListElement.classList.add("is-empty");
@@ -2888,20 +3011,50 @@ function renderSidebarModels(payload) {
   reRenderIcons();
 }
 
-async function loadConnectedProviderModels() {
-  try {
-    const payload = await request("/api/models/connected");
-    connectedProviderModelsPayload = normalizeConnectedProviderModelsPayload(payload);
-    connectedProviderModelsError = null;
-  } catch (error) {
-    connectedProviderModelsPayload = {
-      providers: [],
-    };
-    connectedProviderModelsError =
-      error instanceof Error ? error.message : "Could not fetch provider models. Please retry.";
+async function loadConnectedProviderModels(options = {}) {
+  const forceRefresh = options.force === true;
+  const refreshAgeMs = Date.now() - connectedProviderModelsLastLoadedAt;
+  const hasFreshCachedModels =
+    !forceRefresh &&
+    connectedProviderModelsLastLoadedAt > 0 &&
+    refreshAgeMs < CONNECTED_MODELS_REFRESH_INTERVAL_MS &&
+    connectedProviderModelsError === null &&
+    Array.isArray(connectedProviderModelsPayload.providers) &&
+    connectedProviderModelsPayload.providers.length > 0;
+
+  if (hasFreshCachedModels) {
+    renderSidebarModels(connectedProviderModelsPayload);
+    return;
   }
 
-  renderSidebarModels(connectedProviderModelsPayload);
+  if (!forceRefresh && connectedProviderModelsInFlight) {
+    await connectedProviderModelsInFlight;
+    return;
+  }
+
+  connectedProviderModelsInFlight = (async () => {
+    try {
+      const payload = await request("/api/models/connected");
+      connectedProviderModelsPayload = normalizeConnectedProviderModelsPayload(payload);
+      connectedProviderModelsError = null;
+      connectedProviderModelsLastLoadedAt = Date.now();
+    } catch (error) {
+      connectedProviderModelsPayload = {
+        providers: [],
+      };
+      connectedProviderModelsError =
+        error instanceof Error ? error.message : "Could not fetch provider models. Please retry.";
+      connectedProviderModelsLastLoadedAt = 0;
+    }
+
+    renderSidebarModels(connectedProviderModelsPayload);
+  })();
+
+  try {
+    await connectedProviderModelsInFlight;
+  } finally {
+    connectedProviderModelsInFlight = null;
+  }
 }
 
 function renderDashboard(data) {
@@ -2915,6 +3068,7 @@ function renderDashboard(data) {
   }
 
   setConnectorControlsEnabled(dashboardAuthorized);
+  clearAccountsInlineError();
 
   renderDashboardQuotaMetrics(data.accounts);
   renderBestAccountCard(data.bestAccount);
@@ -2935,17 +3089,21 @@ function renderDashboard(data) {
   refreshTopbarStatus();
 }
 
-async function loadDashboard() {
+async function loadDashboard(options = {}) {
+  const forceModelsRefresh = options.forceModelsRefresh === true;
   setAccountsListBusy(true);
+  clearAccountsInlineError();
   try {
-    void loadConnectedProviderModels();
+    void loadConnectedProviderModels({ force: forceModelsRefresh || !dashboardLoaded });
     const payload = await request("/api/dashboard");
     renderDashboard(payload);
   } catch (error) {
+    const details = error instanceof Error ? error.message : "Could not load dashboard data.";
     if (!dashboardLoaded) {
-      renderAccountsLoadError(error instanceof Error ? error.message : "Could not load dashboard data.");
+      renderAccountsLoadError(details);
     } else {
       setAccountsListBusy(false);
+      setAccountsInlineError(details);
     }
     statusError = true;
     refreshTopbarStatus();
@@ -3758,7 +3916,7 @@ async function saveRoutingPreferences(preferences) {
 async function removeAccount(accountId) {
   await request(`/api/accounts/${accountId}/remove`, { method: "POST" });
   showToast("Connection removed.");
-  await loadDashboard();
+  await loadDashboard({ forceModelsRefresh: true });
 }
 
 function checkConnectionToast() {
@@ -4027,20 +4185,27 @@ document.addEventListener("click", async (event) => {
       }
     }
 
-    try {
-      await removeAccount(accountId);
-    } catch (error) {
-      showToast(error.message || "Could not remove connection. Please try again.", true);
-    }
+    const button = removeButton instanceof HTMLButtonElement ? removeButton : null;
+    await withBusyButton(button, async () => {
+      try {
+        await removeAccount(accountId);
+      } catch (error) {
+        showToast(error.message || "Could not remove connection. Please try again.", true);
+      }
+    });
     return;
   }
 
   if (targetElement.closest("#rotate-key")) {
-    try {
-      await rotateConnectorKey();
-    } catch (error) {
-      showToast(error.message || "Could not rotate key. Please try again.", true);
-    }
+    const button = targetElement.closest("#rotate-key");
+    const rotateButton = button instanceof HTMLButtonElement ? button : null;
+    await withBusyButton(rotateButton, async () => {
+      try {
+        await rotateConnectorKey();
+      } catch (error) {
+        showToast(error.message || "Could not rotate key. Please try again.", true);
+      }
+    });
     return;
   }
 
@@ -4065,12 +4230,14 @@ document.addEventListener("click", async (event) => {
   }
 
   if (targetElement.closest("#refresh-dashboard")) {
-    try {
-      await loadDashboard();
-      showToast("Dashboard refreshed.");
-    } catch (error) {
-      showToast(error.message || "Could not refresh data. Check your connection and try again.", true);
-    }
+    await withBusyButton(refreshDashboardButton, async () => {
+      try {
+        await loadDashboard();
+        showToast("Dashboard refreshed.");
+      } catch (error) {
+        showToast(error.message || "Could not refresh data. Check your connection and try again.", true);
+      }
+    });
     return;
   }
 });
@@ -4079,16 +4246,20 @@ if (routingPriorityForm instanceof HTMLFormElement) {
   routingPriorityForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    try {
-      const nextPreferences = collectRoutingPreferencesFromForm();
-      const saved = await saveRoutingPreferences(nextPreferences);
-      renderRoutingPreferencesForm(saved);
-      setConnectorControlsEnabled(dashboardAuthorized);
-      showToast("Routing priority saved.");
-      await loadDashboard();
-    } catch (error) {
-      showToast(error.message || "Could not save routing priority. Please try again.", true);
-    }
+    const submitButton = routingPriorityForm.querySelector('button[type="submit"]');
+    const saveButton = submitButton instanceof HTMLButtonElement ? submitButton : null;
+    await withBusyButton(saveButton, async () => {
+      try {
+        const nextPreferences = collectRoutingPreferencesFromForm();
+        const saved = await saveRoutingPreferences(nextPreferences);
+        renderRoutingPreferencesForm(saved);
+        setConnectorControlsEnabled(dashboardAuthorized);
+        showToast("Routing priority saved.");
+        await loadDashboard();
+      } catch (error) {
+        showToast(error.message || "Could not save routing priority. Please try again.", true);
+      }
+    });
   });
 }
 
@@ -4102,17 +4273,19 @@ if (routingPreferredProviderInput instanceof HTMLSelectElement) {
 
 if (routingPriorityResetButton instanceof HTMLButtonElement) {
   routingPriorityResetButton.addEventListener("click", async () => {
-    try {
-      const defaults = defaultRoutingPreferences();
-      renderRoutingPreferencesForm(defaults);
-      setConnectorControlsEnabled(dashboardAuthorized);
-      const saved = await saveRoutingPreferences(defaults);
-      renderRoutingPreferencesForm(saved);
-      showToast("Routing priority reset to auto.");
-      await loadDashboard();
-    } catch (error) {
-      showToast(error.message || "Could not reset routing priority. Please try again.", true);
-    }
+    await withBusyButton(routingPriorityResetButton, async () => {
+      try {
+        const defaults = defaultRoutingPreferences();
+        renderRoutingPreferencesForm(defaults);
+        setConnectorControlsEnabled(dashboardAuthorized);
+        const saved = await saveRoutingPreferences(defaults);
+        renderRoutingPreferencesForm(saved);
+        showToast("Routing priority reset to auto.");
+        await loadDashboard();
+      } catch (error) {
+        showToast(error.message || "Could not reset routing priority. Please try again.", true);
+      }
+    });
   });
 }
 
@@ -4153,23 +4326,25 @@ if (apiLinkForm instanceof HTMLFormElement) {
       return;
     }
 
-    try {
-      await request("/api/accounts/link-api", {
-        method: "POST",
-        body: {
-          provider: selectedApiProviderId,
-          displayName,
-          providerAccountId,
-          apiKey,
-        },
-      });
+    await withBusyButton(apiLinkSubmitButton, async () => {
+      try {
+        await request("/api/accounts/link-api", {
+          method: "POST",
+          body: {
+            provider: selectedApiProviderId,
+            displayName,
+            providerAccountId,
+            apiKey,
+          },
+        });
 
-      showToast(`${provider.name} linked via API key.`);
-      closeConnectModal();
-      await loadDashboard();
-    } catch (error) {
-      showToast(error.message || "Could not link API key. Please try again.", true);
-    }
+        showToast(`${provider.name} linked via API key.`);
+        closeConnectModal();
+        await loadDashboard({ forceModelsRefresh: true });
+      } catch (error) {
+        showToast(error.message || "Could not link API key. Please try again.", true);
+      }
+    });
   });
 }
 
@@ -4213,18 +4388,20 @@ if (accountSettingsForm instanceof HTMLFormElement) {
       displayName,
     };
 
-    try {
-      await request(`/api/accounts/${encodeURIComponent(selectedAccountSettingsId)}/settings`, {
-        method: "POST",
-        body: payload,
-      });
+    await withBusyButton(accountSettingsSaveButton, async () => {
+      try {
+        await request(`/api/accounts/${encodeURIComponent(selectedAccountSettingsId)}/settings`, {
+          method: "POST",
+          body: payload,
+        });
 
-      showToast("Connection settings saved.");
-      closeAccountSettingsModal();
-      await loadDashboard();
-    } catch (error) {
-      showToast(error.message || "Could not save connection settings. Please try again.", true);
-    }
+        showToast("Connection settings saved.");
+        closeAccountSettingsModal();
+        await loadDashboard();
+      } catch (error) {
+        showToast(error.message || "Could not save connection settings. Please try again.", true);
+      }
+    });
   });
 }
 
@@ -4486,7 +4663,7 @@ window.addEventListener("resize", () => {
   applySidebarState();
 
   if (activeWarningTrigger instanceof HTMLElement && connectWarningTooltipElement instanceof HTMLElement && !connectWarningTooltipElement.hidden) {
-    positionConnectWarningTooltip(activeWarningTrigger, connectWarningTooltipElement);
+    requestConnectWarningTooltipReposition();
   }
 });
 
@@ -4494,7 +4671,7 @@ window.addEventListener(
   "scroll",
   () => {
     if (activeWarningTrigger instanceof HTMLElement && connectWarningTooltipElement instanceof HTMLElement && !connectWarningTooltipElement.hidden) {
-      positionConnectWarningTooltip(activeWarningTrigger, connectWarningTooltipElement);
+      requestConnectWarningTooltipReposition();
     }
   },
   true,

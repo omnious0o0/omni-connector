@@ -90,8 +90,8 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
-  height: 100vh;
-  width: 100vw;
+  min-height: 100dvh;
+  width: 100%;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
@@ -436,10 +436,6 @@ body.resizing-sidebar {
   height: 15px;
 }
 
-.app-layout.sidebar-collapsed .sidebar .sidebar-pages {
-  display: none;
-}
-
 .nav-actions {
   display: flex;
   flex-direction: column;
@@ -506,6 +502,10 @@ body.resizing-sidebar {
   pointer-events: none;
 }
 
+.btn.is-loading {
+  opacity: 0.75;
+}
+
 .btn-icon {
   padding: 6px;
   background: transparent;
@@ -521,11 +521,6 @@ body.resizing-sidebar {
   color: var(--warning-base);
   background: var(--warning-bg);
   border-color: var(--warning-border);
-}
-
-.btn-disabled {
-  opacity: 0.5;
-  pointer-events: none;
 }
 
 .lucide {
@@ -795,6 +790,15 @@ body.resizing-sidebar {
   min-height: min(260px, 100%);
 }
 
+.accounts-inline-error {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  padding: 8px;
+}
+
 .account-card {
   background: var(--bg-app);
   border: 1px solid var(--border-light);
@@ -807,6 +811,11 @@ body.resizing-sidebar {
   aspect-ratio: auto;
   height: 100%;
   overflow: hidden;
+}
+
+body.accounts-density-compact .account-card {
+  padding: 8px;
+  gap: 6px;
 }
 
 body.accounts-density-comfortable .account-card {
@@ -1298,6 +1307,7 @@ body.accounts-density-comfortable .account-card {
   inset: 0;
   background: rgba(5, 6, 8, 0.74);
   backdrop-filter: blur(2px);
+  cursor: pointer;
 }
 
 .connect-modal-panel {
@@ -1675,6 +1685,7 @@ body.accounts-density-comfortable .account-card {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-light);
   background: rgba(255, 255, 255, 0.01);
+  cursor: pointer;
 }
 
 .settings-switch-copy {
@@ -1845,7 +1856,7 @@ body.accounts-density-comfortable .account-card {
     padding: 20px;
   }
 
-  .page-header {
+  .topbar-container {
     grid-template-columns: 1fr;
     justify-items: center;
     gap: 8px;

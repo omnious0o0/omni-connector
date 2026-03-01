@@ -44,7 +44,7 @@
       </div>
 
       <nav class="sidebar-nav">
-        <div class="sidebar-pages" role="tablist" aria-label="Workspace views">
+        <div class="sidebar-pages" role="tablist" aria-label="Workspace views" aria-orientation="vertical">
           <button id="show-overview" class="side-tab is-active" type="button" role="tab" aria-selected="true"
             aria-controls="dashboard-view">
             <i data-lucide="layout-dashboard"></i>
@@ -123,6 +123,7 @@
                   <p>Checking connected providers and usage status.</p>
                 </div>
               </div>
+              <p id="accounts-inline-error" class="accounts-inline-error" role="status" aria-live="polite" hidden></p>
             </div>
           </section>
         </div>
